@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     environment: str = "development"
     debug: bool = True
     api_prefix: str = "/api/v1"
+    database_url: str
     cors_origins: str = (
         "http://localhost:5173,"
         "http://127.0.0.1:5173"
