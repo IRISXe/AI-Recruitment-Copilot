@@ -1,18 +1,23 @@
 from fastapi import FastAPI
 
-from app.api.routes.health import router as health_router
+from app.api.router import api_router
+from app.core.config import get_settings
+
+settings = get_settings()
 
 app = FastAPI(
-    title="AI Recruitment Copilot API",
+    title=settings.app_name,
     description="Backend API for the AI Recruitment Copilot application.",
-    version="0.1.0",
+    version=settings.app_version,
+    debug=settings.debug,
 )
 
-app.include_router(health_router)
+app.include_router(api_router)
 
 
 @app.get("/", tags=["Root"])
 async def root() -> dict[str, str]:
     return {
-        "message": "AI Recruitment Copilot API is running",
+        "message": f"{settings.app_name} is running",
+        "environment": settings.environment,
     }

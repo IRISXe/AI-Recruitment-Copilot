@@ -1,12 +1,21 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
-router = APIRouter(tags=["Health"])
+from app.core.config import Settings, get_settings
+from app.schemas.health import HealthResponse
+
+router = APIRouter(prefix="/health", tags=["Health"])
 
 
-@router.get("/health", summary="Check API health")
-async def health_check() -> dict[str, str]:
-    return {
-        "status": "ok",
-        "service": "AI Recruitment Copilot API",
-        "environment": "development",
-    }
+@router.get(
+    "",
+    response_model=HealthResponse,
+    summary="Check API health",
+)
+async def health_check(
+    settings: Settings = Depends(get_settings),
+) -> HealthResponse:
+    return HealthResponse(
+        status="ok",
+        service=settings.app_name,
+        environment=settings.environment,
+    )
