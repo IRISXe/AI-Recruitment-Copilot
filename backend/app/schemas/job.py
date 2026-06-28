@@ -37,6 +37,10 @@ class JobValidationRequest(BaseModel):
         max_length=20,
         examples=[["React", "TypeScript", "REST APIs"]],
     )
+    preferred_skills: list[str] = Field(
+    default_factory=list,
+    max_length=20,
+)
 
 
 class JobValidationResponse(BaseModel):
