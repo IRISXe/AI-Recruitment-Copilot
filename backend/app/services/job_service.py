@@ -10,6 +10,7 @@ from app.models.job import Job
 from app.repositories.job_repository import (
     create_job as create_job_record,
     get_job_by_id as get_job_by_id_record,
+    list_jobs as list_jobs_records,
 )
 from app.schemas.job import JobCreate
 
@@ -67,5 +68,30 @@ def get_job_by_id(
             code="job_not_found",
             message="The requested job does not exist.",
         )
+
+def list_jobs(
+    session: Session,
+    *,
+    offset: int,
+    limit: int,
+) -> list[Job]:
+    try:
+        return list_jobs_records(
+            session,
+            offset=offset,
+            limit=limit,
+        )
+    except SQLAlchemyError as exc:
+        session.rollback()
+
+        logger.exception(
+            "Database error while listing jobs."
+        )
+
+        raise AppException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            code="job_listing_failed",
+            message="The jobs could not be retrieved.",
+        ) from exc
 
     return job
