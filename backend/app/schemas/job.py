@@ -1,4 +1,6 @@
+from datetime import datetime
 from typing import Literal
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -38,9 +40,24 @@ class JobValidationRequest(BaseModel):
         examples=[["React", "TypeScript", "REST APIs"]],
     )
     preferred_skills: list[str] = Field(
-    default_factory=list,
-    max_length=20,
-)
+        default_factory=list,
+        max_length=20,
+    )
+
+
+class JobCreate(JobValidationRequest):
+    pass
+
+
+class JobResponse(JobValidationRequest):
+    model_config = ConfigDict(
+        str_strip_whitespace=True,
+        from_attributes=True,
+    )
+
+    id: UUID
+    created_at: datetime
+    updated_at: datetime
 
 
 class JobValidationResponse(BaseModel):
