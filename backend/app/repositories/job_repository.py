@@ -1,3 +1,5 @@
+from uuid import UUID
+
 from sqlalchemy.orm import Session
 
 from app.models.job import Job
@@ -14,3 +16,10 @@ def create_job(
     session.flush()
 
     return job
+
+
+def get_job_by_id(
+    session: Session,
+    job_id: UUID,
+) -> Job | None:
+    return session.get(Job, job_id)
