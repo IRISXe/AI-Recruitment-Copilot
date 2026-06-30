@@ -1,5 +1,6 @@
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.job import Job
@@ -23,3 +24,19 @@ def get_job_by_id(
     job_id: UUID,
 ) -> Job | None:
     return session.get(Job, job_id)
+
+
+def list_jobs(
+    session: Session,
+    *,
+    offset: int,
+    limit: int,
+) -> list[Job]:
+    statement = (
+        select(Job)
+        .order_by(Job.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+
+    return list(session.scalars(statement).all())
