@@ -11,8 +11,9 @@ from app.repositories.job_repository import (
     create_job as create_job_record,
     get_job_by_id as get_job_by_id_record,
     list_jobs as list_jobs_records,
+    update_job as update_job_record,
 )
-from app.schemas.job import JobCreate
+from app.schemas.job import JobCreate, JobUpdate
 
 
 logger = logging.getLogger(__name__)
@@ -95,4 +96,44 @@ def list_jobs(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             code="job_listing_failed",
             message="The jobs could not be retrieved.",
+        ) from exc
+
+
+def update_job(
+    session: Session,
+    *,
+    job_id: UUID,
+    payload: JobUpdate,
+) -> Job:
+    try:
+        job = get_job_by_id_record(session, job_id)
+
+        if job is None:
+            raise AppException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                code="job_not_found",
+                message="The requested job does not exist.",
+            )
+
+        updated_job = update_job_record(
+            session,
+            job=job,
+            payload=payload,
+        )
+
+        session.commit()
+        session.refresh(updated_job)
+
+        return updated_job
+    except SQLAlchemyError as exc:
+        session.rollback()
+
+        logger.exception(
+            "Database error while updating a job."
+        )
+
+        raise AppException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            code="job_update_failed",
+            message="The job could not be updated.",
         ) from exc
