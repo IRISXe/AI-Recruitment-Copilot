@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.job import Job
-from app.schemas.job import JobCreate
+from app.schemas.job import JobCreate, JobUpdate
 
 
 def create_job(
@@ -40,3 +40,19 @@ def list_jobs(
     )
 
     return list(session.scalars(statement).all())
+
+
+def update_job(
+    session: Session,
+    *,
+    job: Job,
+    payload: JobUpdate,
+) -> Job:
+    update_data = payload.model_dump(exclude_unset=True)
+
+    for field_name, value in update_data.items():
+        setattr(job, field_name, value)
+
+    session.flush()
+
+    return job
