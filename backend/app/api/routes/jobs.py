@@ -2,6 +2,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
+
 from app.db.session import get_db
 from app.schemas.job import (
     JobCreate,
@@ -50,14 +51,6 @@ async def validate_job(
 
 
 @router.get(
-    "/{job_id}",
-    response_model=JobResponse,
-    status_code=status.HTTP_200_OK,
-    summary="Get a job by ID",
-)
-
-
-@router.get(
     "",
     response_model=list[JobResponse],
     status_code=status.HTTP_200_OK,
@@ -78,6 +71,14 @@ def list_jobs(
         JobResponse.model_validate(job)
         for job in jobs
     ]
+
+
+@router.get(
+    "/{job_id}",
+    response_model=JobResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get a job by ID",
+)
 def get_job_by_id(
     job_id: UUID,
     session: Session = Depends(get_db),
