@@ -69,6 +69,9 @@ def get_job_by_id(
             message="The requested job does not exist.",
         )
 
+    return job
+
+
 def list_jobs(
     session: Session,
     *,
@@ -93,5 +96,3 @@ def list_jobs(
             code="job_listing_failed",
             message="The jobs could not be retrieved.",
         ) from exc
-
-    return job
