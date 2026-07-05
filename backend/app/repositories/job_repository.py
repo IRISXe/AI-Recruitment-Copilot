@@ -56,3 +56,12 @@ def update_job(
     session.flush()
 
     return job
+
+
+def delete_job(
+    session: Session,
+    *,
+    job: Job,
+) -> None:
+    session.delete(job)
+    session.flush()
