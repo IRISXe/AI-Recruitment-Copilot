@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, Response, status
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -13,6 +13,7 @@ from app.schemas.job import (
 )
 from app.services.job_service import (
     create_job as create_job_service,
+    delete_job as delete_job_service,
     get_job_by_id as get_job_by_id_service,
     list_jobs as list_jobs_service,
     update_job as update_job_service,
@@ -108,3 +109,22 @@ def update_job(
     )
 
     return JobResponse.model_validate(job)
+
+
+@router.delete(
+    "/{job_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete a job",
+)
+def delete_job(
+    job_id: UUID,
+    session: Session = Depends(get_db),
+) -> Response:
+    delete_job_service(
+        session,
+        job_id=job_id,
+    )
+
+    return Response(
+        status_code=status.HTTP_204_NO_CONTENT,
+    )
