@@ -7,6 +7,7 @@ from app.db.session import get_db
 from app.schemas.job import (
     JobCreate,
     JobResponse,
+    JobUpdate,
     JobValidationRequest,
     JobValidationResponse,
 )
@@ -14,6 +15,7 @@ from app.services.job_service import (
     create_job as create_job_service,
     get_job_by_id as get_job_by_id_service,
     list_jobs as list_jobs_service,
+    update_job as update_job_service,
 )
 
 
@@ -84,5 +86,25 @@ def get_job_by_id(
     session: Session = Depends(get_db),
 ) -> JobResponse:
     job = get_job_by_id_service(session, job_id)
+
+    return JobResponse.model_validate(job)
+
+
+@router.patch(
+    "/{job_id}",
+    response_model=JobResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Update a job",
+)
+def update_job(
+    job_id: UUID,
+    payload: JobUpdate,
+    session: Session = Depends(get_db),
+) -> JobResponse:
+    job = update_job_service(
+        session,
+        job_id=job_id,
+        payload=payload,
+    )
 
     return JobResponse.model_validate(job)
