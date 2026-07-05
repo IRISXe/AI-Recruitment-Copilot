@@ -9,6 +9,7 @@ from app.core.exceptions import AppException
 from app.models.job import Job
 from app.repositories.job_repository import (
     create_job as create_job_record,
+    delete_job as delete_job_record,
     get_job_by_id as get_job_by_id_record,
     list_jobs as list_jobs_records,
     update_job as update_job_record,
@@ -136,4 +137,39 @@ def update_job(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             code="job_update_failed",
             message="The job could not be updated.",
+        ) from exc
+
+
+def delete_job(
+    session: Session,
+    *,
+    job_id: UUID,
+) -> None:
+    try:
+        job = get_job_by_id_record(session, job_id)
+
+        if job is None:
+            raise AppException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                code="job_not_found",
+                message="The requested job does not exist.",
+            )
+
+        delete_job_record(
+            session,
+            job=job,
+        )
+
+        session.commit()
+    except SQLAlchemyError as exc:
+        session.rollback()
+
+        logger.exception(
+            "Database error while deleting a job."
+        )
+
+        raise AppException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            code="job_deletion_failed",
+            message="The job could not be deleted.",
         ) from exc
