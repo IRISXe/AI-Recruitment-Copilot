@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import engine, get_db
 from app.main import app
+from app.models.candidate import Candidate
 from app.models.job import Job
 
 
@@ -16,8 +17,10 @@ def db_connection() -> Generator[Connection, None, None]:
     connection = engine.connect()
     transaction = connection.begin()
 
-    # Tests begin with an empty jobs table. Existing development
-    # rows are restored when the outer transaction is rolled back.
+    # Tests begin with empty jobs and candidates tables.
+    # Existing development rows are restored when the outer
+    # transaction is rolled back.
+    connection.execute(delete(Candidate))
     connection.execute(delete(Job))
 
     try:
