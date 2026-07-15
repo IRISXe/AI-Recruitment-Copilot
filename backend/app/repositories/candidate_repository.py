@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.candidate import Candidate
-from app.schemas.candidate import CandidateCreate
+from app.schemas.candidate import CandidateCreate, CandidateUpdate
 
 
 def create_candidate(
@@ -40,3 +40,19 @@ def list_candidates(
     )
 
     return list(session.scalars(statement).all())
+
+
+def update_candidate(
+    session: Session,
+    *,
+    candidate: Candidate,
+    payload: CandidateUpdate,
+) -> Candidate:
+    update_data = payload.model_dump(exclude_unset=True)
+
+    for field_name, value in update_data.items():
+        setattr(candidate, field_name, value)
+
+    session.flush()
+
+    return candidate
