@@ -7,7 +7,9 @@ from app.models.candidate import Candidate
 from app.repositories.candidate_repository import (
     get_candidate_by_id,
     list_candidates,
+    update_candidate,
 )
+from app.schemas.candidate import CandidateUpdate
 
 
 def build_candidate(
@@ -116,3 +118,51 @@ def test_list_candidates_returns_newest_candidates_with_pagination(
     assert [candidate.id for candidate in second_page] == [
         first_candidate.id,
     ]
+
+
+def test_update_candidate_changes_only_provided_fields(
+    db_session: Session,
+) -> None:
+    candidate = build_candidate()
+
+    db_session.add(candidate)
+    db_session.flush()
+
+    original_id = candidate.id
+    original_email = candidate.email
+    original_phone = candidate.phone
+    original_location = candidate.current_location
+    original_skills = candidate.skills
+
+    updated_candidate = update_candidate(
+        session=db_session,
+        candidate=candidate,
+        payload=CandidateUpdate(
+            full_name="Harsha Updated",
+            current_role="Senior Backend Developer",
+            total_experience_months=24,
+        ),
+    )
+
+    assert updated_candidate is candidate
+    assert updated_candidate.id == original_id
+    assert updated_candidate.full_name == "Harsha Updated"
+    assert updated_candidate.current_role == "Senior Backend Developer"
+    assert updated_candidate.total_experience_months == 24
+
+    assert updated_candidate.email == original_email
+    assert updated_candidate.phone == original_phone
+    assert updated_candidate.current_location == original_location
+    assert updated_candidate.skills == original_skills
+
+    db_session.expire_all()
+
+    persisted_candidate = get_candidate_by_id(
+        session=db_session,
+        candidate_id=original_id,
+    )
+
+    assert persisted_candidate is not None
+    assert persisted_candidate.full_name == "Harsha Updated"
+    assert persisted_candidate.current_role == "Senior Backend Developer"
+    assert persisted_candidate.total_experience_months == 24
