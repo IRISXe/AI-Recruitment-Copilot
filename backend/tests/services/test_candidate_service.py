@@ -11,6 +11,7 @@ from app.models.candidate import Candidate
 from app.schemas.candidate import CandidateCreate, CandidateUpdate
 from app.services.candidate_service import (
     create_candidate,
+    delete_candidate,
     get_candidate_by_id,
     list_candidates,
     update_candidate,
@@ -311,4 +312,92 @@ def test_update_candidate_rolls_back_database_error() -> None:
         expected_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         expected_code="candidate_update_failed",
         expected_message="The candidate could not be updated.",
+    )
+
+
+def test_delete_candidate_commits_and_returns_none() -> None:
+    session = MagicMock(spec=Session)
+    candidate_id = uuid4()
+    candidate = MagicMock(spec=Candidate)
+
+    with patch(
+        "app.services.candidate_service.get_candidate_by_id_record",
+        return_value=candidate,
+    ) as get_record:
+        with patch(
+            "app.services.candidate_service.delete_candidate_record",
+        ) as delete_record:
+            result = delete_candidate(
+                session=session,
+                candidate_id=candidate_id,
+            )
+
+    get_record.assert_called_once_with(session, candidate_id)
+    delete_record.assert_called_once_with(
+        session,
+        candidate=candidate,
+    )
+    session.commit.assert_called_once_with()
+    session.rollback.assert_not_called()
+
+    assert result is None
+
+
+def test_delete_candidate_raises_not_found() -> None:
+    session = MagicMock(spec=Session)
+    candidate_id = uuid4()
+
+    with patch(
+        "app.services.candidate_service.get_candidate_by_id_record",
+        return_value=None,
+    ) as get_record:
+        with patch(
+            "app.services.candidate_service.delete_candidate_record",
+        ) as delete_record:
+            with pytest.raises(AppException) as exc_info:
+                delete_candidate(
+                    session=session,
+                    candidate_id=candidate_id,
+                )
+
+    get_record.assert_called_once_with(session, candidate_id)
+    delete_record.assert_not_called()
+    session.commit.assert_not_called()
+    session.rollback.assert_not_called()
+
+    assert_app_exception(
+        exc_info.value,
+        expected_status=status.HTTP_404_NOT_FOUND,
+        expected_code="candidate_not_found",
+        expected_message="The requested candidate does not exist.",
+    )
+
+
+def test_delete_candidate_rolls_back_database_error() -> None:
+    session = MagicMock(spec=Session)
+    candidate_id = uuid4()
+    candidate = MagicMock(spec=Candidate)
+
+    with patch(
+        "app.services.candidate_service.get_candidate_by_id_record",
+        return_value=candidate,
+    ):
+        with patch(
+            "app.services.candidate_service.delete_candidate_record",
+            side_effect=SQLAlchemyError("database failure"),
+        ):
+            with pytest.raises(AppException) as exc_info:
+                delete_candidate(
+                    session=session,
+                    candidate_id=candidate_id,
+                )
+
+    session.rollback.assert_called_once_with()
+    session.commit.assert_not_called()
+
+    assert_app_exception(
+        exc_info.value,
+        expected_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        expected_code="candidate_deletion_failed",
+        expected_message="The candidate could not be deleted.",
     )
