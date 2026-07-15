@@ -56,3 +56,12 @@ def update_candidate(
     session.flush()
 
     return candidate
+
+
+def delete_candidate(
+    session: Session,
+    *,
+    candidate: Candidate,
+) -> None:
+    session.delete(candidate)
+    session.flush()
