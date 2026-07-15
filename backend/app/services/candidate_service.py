@@ -9,6 +9,7 @@ from app.core.exceptions import AppException
 from app.models.candidate import Candidate
 from app.repositories.candidate_repository import (
     create_candidate as create_candidate_record,
+    delete_candidate as delete_candidate_record,
     get_candidate_by_id as get_candidate_by_id_record,
     list_candidates as list_candidates_records,
     update_candidate as update_candidate_record,
@@ -145,4 +146,42 @@ def update_candidate(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             code="candidate_update_failed",
             message="The candidate could not be updated.",
+        ) from exc
+
+
+def delete_candidate(
+    session: Session,
+    *,
+    candidate_id: UUID,
+) -> None:
+    try:
+        candidate = get_candidate_by_id_record(
+            session,
+            candidate_id,
+        )
+
+        if candidate is None:
+            raise AppException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                code="candidate_not_found",
+                message="The requested candidate does not exist.",
+            )
+
+        delete_candidate_record(
+            session,
+            candidate=candidate,
+        )
+
+        session.commit()
+    except SQLAlchemyError as exc:
+        session.rollback()
+
+        logger.exception(
+            "Database error while deleting a candidate."
+        )
+
+        raise AppException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            code="candidate_deletion_failed",
+            message="The candidate could not be deleted.",
         ) from exc
