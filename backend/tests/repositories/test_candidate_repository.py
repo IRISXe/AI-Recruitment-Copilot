@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.models.candidate import Candidate
 from app.repositories.candidate_repository import (
+    delete_candidate,
     get_candidate_by_id,
     list_candidates,
     update_candidate,
@@ -166,3 +167,28 @@ def test_update_candidate_changes_only_provided_fields(
     assert persisted_candidate.full_name == "Harsha Updated"
     assert persisted_candidate.current_role == "Senior Backend Developer"
     assert persisted_candidate.total_experience_months == 24
+
+
+def test_delete_candidate_removes_candidate_from_session(
+    db_session: Session,
+) -> None:
+    candidate = build_candidate()
+
+    db_session.add(candidate)
+    db_session.flush()
+
+    candidate_id = candidate.id
+
+    delete_candidate(
+        session=db_session,
+        candidate=candidate,
+    )
+
+    db_session.expire_all()
+
+    deleted_candidate = get_candidate_by_id(
+        session=db_session,
+        candidate_id=candidate_id,
+    )
+
+    assert deleted_candidate is None
