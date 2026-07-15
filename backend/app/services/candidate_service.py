@@ -11,8 +11,9 @@ from app.repositories.candidate_repository import (
     create_candidate as create_candidate_record,
     get_candidate_by_id as get_candidate_by_id_record,
     list_candidates as list_candidates_records,
+    update_candidate as update_candidate_record,
 )
-from app.schemas.candidate import CandidateCreate
+from app.schemas.candidate import CandidateCreate, CandidateUpdate
 
 
 logger = logging.getLogger(__name__)
@@ -101,4 +102,47 @@ def list_candidates(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             code="candidate_listing_failed",
             message="The candidates could not be retrieved.",
+        ) from exc
+
+
+def update_candidate(
+    session: Session,
+    *,
+    candidate_id: UUID,
+    payload: CandidateUpdate,
+) -> Candidate:
+    try:
+        candidate = get_candidate_by_id_record(
+            session,
+            candidate_id,
+        )
+
+        if candidate is None:
+            raise AppException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                code="candidate_not_found",
+                message="The requested candidate does not exist.",
+            )
+
+        updated_candidate = update_candidate_record(
+            session,
+            candidate=candidate,
+            payload=payload,
+        )
+
+        session.commit()
+        session.refresh(updated_candidate)
+
+        return updated_candidate
+    except SQLAlchemyError as exc:
+        session.rollback()
+
+        logger.exception(
+            "Database error while updating a candidate."
+        )
+
+        raise AppException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            code="candidate_update_failed",
+            message="The candidate could not be updated.",
         ) from exc
