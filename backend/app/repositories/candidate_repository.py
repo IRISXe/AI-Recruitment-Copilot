@@ -1,5 +1,6 @@
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.candidate import Candidate
@@ -23,3 +24,19 @@ def get_candidate_by_id(
     candidate_id: UUID,
 ) -> Candidate | None:
     return session.get(Candidate, candidate_id)
+
+
+def list_candidates(
+    session: Session,
+    *,
+    offset: int,
+    limit: int,
+) -> list[Candidate]:
+    statement = (
+        select(Candidate)
+        .order_by(Candidate.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+
+    return list(session.scalars(statement).all())
