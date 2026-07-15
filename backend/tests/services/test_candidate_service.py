@@ -12,6 +12,7 @@ from app.schemas.candidate import CandidateCreate
 from app.services.candidate_service import (
     create_candidate,
     get_candidate_by_id,
+    list_candidates,
 )
 
 
@@ -152,4 +153,55 @@ def test_get_candidate_by_id_rolls_back_database_error() -> None:
         expected_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         expected_code="candidate_retrieval_failed",
         expected_message="The candidate could not be retrieved.",
+    )
+
+
+def test_list_candidates_returns_repository_results() -> None:
+    session = MagicMock(spec=Session)
+    candidates = [
+        MagicMock(spec=Candidate),
+        MagicMock(spec=Candidate),
+    ]
+
+    with patch(
+        "app.services.candidate_service.list_candidates_records",
+        return_value=candidates,
+    ) as list_records:
+        result = list_candidates(
+            session=session,
+            offset=10,
+            limit=20,
+        )
+
+    list_records.assert_called_once_with(
+        session,
+        offset=10,
+        limit=20,
+    )
+    session.rollback.assert_not_called()
+
+    assert result is candidates
+
+
+def test_list_candidates_rolls_back_database_error() -> None:
+    session = MagicMock(spec=Session)
+
+    with patch(
+        "app.services.candidate_service.list_candidates_records",
+        side_effect=SQLAlchemyError("database failure"),
+    ):
+        with pytest.raises(AppException) as exc_info:
+            list_candidates(
+                session=session,
+                offset=0,
+                limit=20,
+            )
+
+    session.rollback.assert_called_once_with()
+
+    assert_app_exception(
+        exc_info.value,
+        expected_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        expected_code="candidate_listing_failed",
+        expected_message="The candidates could not be retrieved.",
     )
