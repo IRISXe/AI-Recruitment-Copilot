@@ -10,6 +10,7 @@ from app.models.candidate import Candidate
 from app.repositories.candidate_repository import (
     create_candidate as create_candidate_record,
     get_candidate_by_id as get_candidate_by_id_record,
+    list_candidates as list_candidates_records,
 )
 from app.schemas.candidate import CandidateCreate
 
@@ -75,3 +76,29 @@ def get_candidate_by_id(
         )
 
     return candidate
+
+
+def list_candidates(
+    session: Session,
+    *,
+    offset: int,
+    limit: int,
+) -> list[Candidate]:
+    try:
+        return list_candidates_records(
+            session,
+            offset=offset,
+            limit=limit,
+        )
+    except SQLAlchemyError as exc:
+        session.rollback()
+
+        logger.exception(
+            "Database error while listing candidates."
+        )
+
+        raise AppException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            code="candidate_listing_failed",
+            message="The candidates could not be retrieved.",
+        ) from exc
