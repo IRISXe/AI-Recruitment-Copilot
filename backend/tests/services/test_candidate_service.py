@@ -1,4 +1,5 @@
 from unittest.mock import MagicMock, patch
+from uuid import uuid4
 
 import pytest
 from fastapi import status
@@ -8,7 +9,10 @@ from sqlalchemy.orm import Session
 from app.core.exceptions import AppException
 from app.models.candidate import Candidate
 from app.schemas.candidate import CandidateCreate
-from app.services.candidate_service import create_candidate
+from app.services.candidate_service import (
+    create_candidate,
+    get_candidate_by_id,
+)
 
 
 def build_create_payload() -> CandidateCreate:
@@ -80,4 +84,72 @@ def test_create_candidate_rolls_back_database_error() -> None:
         expected_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         expected_code="candidate_creation_failed",
         expected_message="The candidate could not be created.",
+    )
+
+
+def test_get_candidate_by_id_returns_existing_candidate() -> None:
+    session = MagicMock(spec=Session)
+    candidate = MagicMock(spec=Candidate)
+    candidate_id = uuid4()
+
+    with patch(
+        "app.services.candidate_service.get_candidate_by_id_record",
+        return_value=candidate,
+    ) as get_record:
+        result = get_candidate_by_id(
+            session=session,
+            candidate_id=candidate_id,
+        )
+
+    get_record.assert_called_once_with(session, candidate_id)
+    session.rollback.assert_not_called()
+
+    assert result is candidate
+
+
+def test_get_candidate_by_id_raises_not_found() -> None:
+    session = MagicMock(spec=Session)
+    candidate_id = uuid4()
+
+    with patch(
+        "app.services.candidate_service.get_candidate_by_id_record",
+        return_value=None,
+    ):
+        with pytest.raises(AppException) as exc_info:
+            get_candidate_by_id(
+                session=session,
+                candidate_id=candidate_id,
+            )
+
+    session.rollback.assert_not_called()
+
+    assert_app_exception(
+        exc_info.value,
+        expected_status=status.HTTP_404_NOT_FOUND,
+        expected_code="candidate_not_found",
+        expected_message="The requested candidate does not exist.",
+    )
+
+
+def test_get_candidate_by_id_rolls_back_database_error() -> None:
+    session = MagicMock(spec=Session)
+    candidate_id = uuid4()
+
+    with patch(
+        "app.services.candidate_service.get_candidate_by_id_record",
+        side_effect=SQLAlchemyError("database failure"),
+    ):
+        with pytest.raises(AppException) as exc_info:
+            get_candidate_by_id(
+                session=session,
+                candidate_id=candidate_id,
+            )
+
+    session.rollback.assert_called_once_with()
+
+    assert_app_exception(
+        exc_info.value,
+        expected_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        expected_code="candidate_retrieval_failed",
+        expected_message="The candidate could not be retrieved.",
     )
