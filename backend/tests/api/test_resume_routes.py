@@ -1,21 +1,29 @@
 from datetime import UTC, datetime
+from pathlib import Path
 from unittest.mock import patch
 from uuid import UUID, uuid4
-from pathlib import Path
+
 import pytest
-from fastapi import UploadFile
+from fastapi import UploadFile, status
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
-from app.services.resume_service import ResumeDownload
-from app.models.candidate import Candidate
-from app.models.resume import Resume
+
 from app.core.config import Settings
+from app.core.exceptions import AppException
+from app.models.resume import Resume
+from app.services.resume_service import ResumeDownload
 
-CANDIDATES_URL = "/api/v1/candidates"
+
 RESUMES_URL = "/api/v1/resumes"
+CANDIDATES_URL = "/api/v1/candidates"
 
-PDF_BYTES = b"%PDF-1.4\nResume content"
+PDF_BYTES = b"%PDF-1.4\nHarsha Resume\n%%EOF"
+DOCX_BYTES = b"PK\x03\x04test-docx-download-content"
+DOCX_CONTENT_TYPE = (
+    "application/vnd.openxmlformats-officedocument."
+    "wordprocessingml.document"
+)
 
 
 def valid_candidate_payload(
@@ -30,11 +38,7 @@ def valid_candidate_payload(
         "current_location": "Hyderabad",
         "current_role": "Backend Developer",
         "total_experience_months": 18,
-        "skills": [
-            "Python",
-            "FastAPI",
-            "PostgreSQL",
-        ],
+        "skills": ["Python", "FastAPI", "PostgreSQL"],
     }
 
 
@@ -551,13 +555,9 @@ def test_download_resume_returns_pdf_file(
     _, call_kwargs = download_service.call_args
 
     assert call_kwargs["resume_id"] == resume_id
-
     assert response.status_code == 200
     assert response.content == PDF_BYTES
-    assert (
-        response.headers["content-type"]
-        == "application/pdf"
-    )
+    assert response.headers["content-type"] == "application/pdf"
 
     content_disposition = response.headers[
         "content-disposition"
@@ -568,6 +568,146 @@ def test_download_resume_returns_pdf_file(
         'filename="Harsha_Resume.pdf"'
         in content_disposition
     )
+
+
+def test_download_resume_returns_docx_file(
+    client: TestClient,
+    tmp_path: Path,
+) -> None:
+    resume_id = uuid4()
+
+    file_path = tmp_path / "stored-resume.docx"
+    file_path.write_bytes(DOCX_BYTES)
+
+    download = ResumeDownload(
+        file_path=file_path,
+        filename="Harsha_Resume.docx",
+        content_type=DOCX_CONTENT_TYPE,
+    )
+
+    with patch(
+        "app.api.routes.resumes.get_resume_download_service",
+        return_value=download,
+    ):
+        response = client.get(
+            f"{RESUMES_URL}/{resume_id}/download"
+        )
+
+    assert response.status_code == 200
+    assert response.content == DOCX_BYTES
+    assert (
+        response.headers["content-type"]
+        == DOCX_CONTENT_TYPE
+    )
+
+    content_disposition = response.headers[
+        "content-disposition"
+    ]
+
+    assert content_disposition.startswith("attachment;")
+    assert (
+        'filename="Harsha_Resume.docx"'
+        in content_disposition
+    )
+
+
+def test_download_resume_returns_404_for_unknown_uuid(
+    client: TestClient,
+) -> None:
+    response = client.get(
+        f"{RESUMES_URL}/{uuid4()}/download"
+    )
+
+    assert response.status_code == 404
+    assert (
+        response.json()["error"]["code"]
+        == "resume_not_found"
+    )
+
+
+def test_download_resume_rejects_malformed_uuid(
+    client: TestClient,
+) -> None:
+    with patch(
+        "app.api.routes.resumes.get_resume_download_service",
+    ) as download_service:
+        response = client.get(
+            f"{RESUMES_URL}/not-a-valid-uuid/download"
+        )
+
+    assert response.status_code == 422
+    assert (
+        response.json()["error"]["code"]
+        == "validation_error"
+    )
+    assert response.json()["error"]["details"][0]["loc"] == [
+        "path",
+        "resume_id",
+    ]
+
+    download_service.assert_not_called()
+
+
+def test_download_resume_returns_404_for_missing_physical_file(
+    client: TestClient,
+) -> None:
+    resume_id = uuid4()
+
+    with patch(
+        "app.api.routes.resumes.get_resume_download_service",
+        side_effect=AppException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            code="resume_file_not_found",
+            message="The Resume file could not be found.",
+        ),
+    ):
+        response = client.get(
+            f"{RESUMES_URL}/{resume_id}/download"
+        )
+
+    assert response.status_code == 404
+    assert response.json() == {
+    "error": {
+        "code": "resume_file_not_found",
+        "message": "The Resume file could not be found.",
+        "details": None,
+    }
+}
+
+
+def test_download_resume_hides_unsafe_storage_path(
+    client: TestClient,
+) -> None:
+    resume_id = uuid4()
+    unsafe_path = (
+        "C:/private/server-storage/resumes/secret.pdf"
+    )
+
+    with patch(
+        "app.api.routes.resumes.get_resume_download_service",
+        side_effect=AppException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            code="resume_download_failed",
+            message=(
+                "The Resume file could not be downloaded."
+            ),
+        ),
+    ):
+        response = client.get(
+            f"{RESUMES_URL}/{resume_id}/download"
+        )
+
+    assert response.status_code == 500
+    assert (
+        response.json()["error"]["code"]
+        == "resume_download_failed"
+    )
+    assert response.json()["error"]["message"] == (
+        "The Resume file could not be downloaded."
+    )
+    assert unsafe_path not in response.text
+    assert "server-storage" not in response.text
+
 
 def test_update_resume_sets_primary_and_demotes_previous_primary(
     client: TestClient,
@@ -959,7 +1099,7 @@ def test_upload_resume_requires_file(
     )
 
     upload_service.assert_not_called()
-def test_upload_and_delete_resume_manages_real_local_file(
+def test_upload_download_and_delete_resume_manages_real_file(
     client: TestClient,
     db_session: Session,
     tmp_path: Path,
@@ -1041,6 +1181,21 @@ def test_upload_and_delete_resume_manages_real_local_file(
         assert (
             persisted_resume.storage_path
             == stored_path.as_posix()
+        )
+
+        download_response = client.get(
+            f"{RESUMES_URL}/{resume_id}/download"
+        )
+
+        assert download_response.status_code == 200
+        assert download_response.content == PDF_BYTES
+        assert (
+            download_response.headers["content-type"]
+            == "application/pdf"
+        )
+        assert (
+            'filename="Harsha_Resume.pdf"'
+            in download_response.headers["content-disposition"]
         )
 
         delete_response = client.delete(

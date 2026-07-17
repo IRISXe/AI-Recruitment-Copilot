@@ -294,6 +294,86 @@ def test_get_resume_by_id_rolls_back_database_error() -> None:
     )
 
 
+def test_get_resume_download_raises_when_metadata_is_missing() -> None:
+    session = MagicMock(spec=Session)
+    settings = MagicMock()
+    resume_id = uuid4()
+
+    with patch(
+        "app.services.resume_service.get_settings",
+        return_value=settings,
+    ):
+        with patch(
+            "app.services.resume_service.get_resume_by_id_record",
+            return_value=None,
+        ) as get_record:
+            with patch(
+                "app.services.resume_service.get_resume_file_path",
+            ) as get_file_path:
+                with pytest.raises(AppException) as exc_info:
+                    get_resume_download(
+                        session=session,
+                        resume_id=resume_id,
+                    )
+
+    get_record.assert_called_once_with(
+        session,
+        resume_id,
+    )
+    get_file_path.assert_not_called()
+
+    session.commit.assert_not_called()
+    session.rollback.assert_not_called()
+    session.refresh.assert_not_called()
+
+    assert_app_exception(
+        exc_info.value,
+        expected_status=status.HTTP_404_NOT_FOUND,
+        expected_code="resume_not_found",
+        expected_message=(
+            "The requested Resume does not exist."
+        ),
+    )
+
+
+def test_get_resume_download_rolls_back_database_error() -> None:
+    session = MagicMock(spec=Session)
+    settings = MagicMock()
+    resume_id = uuid4()
+
+    with patch(
+        "app.services.resume_service.get_settings",
+        return_value=settings,
+    ):
+        with patch(
+            "app.services.resume_service.get_resume_by_id_record",
+            side_effect=SQLAlchemyError("database failure"),
+        ):
+            with patch(
+                "app.services.resume_service.get_resume_file_path",
+            ) as get_file_path:
+                with pytest.raises(AppException) as exc_info:
+                    get_resume_download(
+                        session=session,
+                        resume_id=resume_id,
+                    )
+
+    get_file_path.assert_not_called()
+
+    session.rollback.assert_called_once_with()
+    session.commit.assert_not_called()
+    session.refresh.assert_not_called()
+
+    assert_app_exception(
+        exc_info.value,
+        expected_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        expected_code="resume_download_failed",
+        expected_message=(
+            "The Resume file could not be downloaded."
+        ),
+    )
+
+
 def test_get_resume_download_returns_download_information() -> None:
     session = MagicMock(spec=Session)
     settings = MagicMock()
@@ -437,6 +517,55 @@ def test_get_resume_download_maps_unsafe_storage_path() -> None:
     )
 
     assert "external-storage" not in exc_info.value.message
+    assert resume.storage_path not in exc_info.value.message
+
+
+def test_get_resume_download_maps_filesystem_failure() -> None:
+    session = MagicMock(spec=Session)
+    settings = MagicMock()
+    resume = MagicMock(spec=Resume)
+    resume_id = uuid4()
+
+    resume.storage_path = (
+        "local_storage/resumes/stored-resume.pdf"
+    )
+    resume.original_filename = "Harsha_Resume.pdf"
+    resume.content_type = "application/pdf"
+
+    with patch(
+        "app.services.resume_service.get_settings",
+        return_value=settings,
+    ):
+        with patch(
+            "app.services.resume_service.get_resume_by_id_record",
+            return_value=resume,
+        ):
+            with patch(
+                "app.services.resume_service.get_resume_file_path",
+                side_effect=ResumeStorageError(
+                    "filesystem access failure"
+                ),
+            ):
+                with pytest.raises(AppException) as exc_info:
+                    get_resume_download(
+                        session=session,
+                        resume_id=resume_id,
+                    )
+
+    session.commit.assert_not_called()
+    session.rollback.assert_not_called()
+    session.refresh.assert_not_called()
+
+    assert_app_exception(
+        exc_info.value,
+        expected_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        expected_code="resume_download_failed",
+        expected_message=(
+            "The Resume file could not be downloaded."
+        ),
+    )
+
+    assert "filesystem" not in exc_info.value.message
     assert resume.storage_path not in exc_info.value.message
 
 
