@@ -24,20 +24,24 @@ from app.repositories.resume_repository import (
 from app.schemas.resume import ResumeCreate, ResumeUpdate
 from app.storage.resume_storage import (
     InvalidResumeFileError,
+    ResumeFileNotFoundError,
     ResumeFileTooLargeError,
     ResumeStorageError,
     delete_resume_file,
+    get_resume_file_path,
     store_resume_file,
 )
 
 
 logger = logging.getLogger(__name__)
 
+
 @dataclass(frozen=True)
 class ResumeDownload:
     file_path: Path
     filename: str
     content_type: str
+
 
 def upload_resume(
     session: Session,
@@ -108,12 +112,13 @@ def upload_resume(
         session.rollback()
 
         raise AppException(
-    status_code=status.HTTP_413_CONTENT_TOO_LARGE,
-    code="resume_file_too_large",
-    message=(
-        "The Resume file exceeds the maximum allowed size."
-    ),
-) from exc
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            code="resume_file_too_large",
+            message=(
+                "The Resume file exceeds the maximum allowed size."
+            ),
+        ) from exc
+
     except InvalidResumeFileError as exc:
         session.rollback()
 
@@ -160,6 +165,7 @@ def upload_resume(
             code="resume_upload_failed",
             message="The Resume could not be uploaded.",
         ) from exc
+
 
 def create_resume(
     session: Session,
@@ -248,6 +254,70 @@ def get_resume_by_id(
         )
 
     return resume
+
+
+def get_resume_download(
+    session: Session,
+    *,
+    resume_id: UUID,
+) -> ResumeDownload:
+    settings = get_settings()
+
+    try:
+        resume = get_resume_by_id_record(
+            session,
+            resume_id,
+        )
+
+    except SQLAlchemyError as exc:
+        session.rollback()
+
+        logger.exception(
+            "Database error while preparing a Resume download."
+        )
+
+        raise AppException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            code="resume_download_failed",
+            message="The Resume file could not be downloaded.",
+        ) from exc
+
+    if resume is None:
+        raise AppException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            code="resume_not_found",
+            message="The requested Resume does not exist.",
+        )
+
+    try:
+        file_path = get_resume_file_path(
+            storage_path=resume.storage_path,
+            settings=settings,
+        )
+
+    except ResumeFileNotFoundError as exc:
+        raise AppException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            code="resume_file_not_found",
+            message="The Resume file could not be found.",
+        ) from exc
+
+    except ResumeStorageError as exc:
+        logger.exception(
+            "Storage error while preparing a Resume download."
+        )
+
+        raise AppException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            code="resume_download_failed",
+            message="The Resume file could not be downloaded.",
+        ) from exc
+
+    return ResumeDownload(
+        file_path=file_path,
+        filename=resume.original_filename,
+        content_type=resume.content_type,
+    )
 
 
 def list_resumes(

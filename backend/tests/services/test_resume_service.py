@@ -1,3 +1,4 @@
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 from uuid import UUID, uuid4
 
@@ -12,6 +13,7 @@ from app.models.resume import Resume
 from app.schemas.resume import ResumeCreate, ResumeUpdate
 from app.storage.resume_storage import (
     InvalidResumeFileError,
+    ResumeFileNotFoundError,
     ResumeFileTooLargeError,
     ResumeStorageError,
     StoredResumeFile,
@@ -20,6 +22,7 @@ from app.services.resume_service import (
     create_resume,
     delete_resume,
     get_resume_by_id,
+    get_resume_download,
     list_resumes,
     update_resume,
     upload_resume,
@@ -289,6 +292,152 @@ def test_get_resume_by_id_rolls_back_database_error() -> None:
         expected_code="resume_retrieval_failed",
         expected_message="The resume could not be retrieved.",
     )
+
+
+def test_get_resume_download_returns_download_information() -> None:
+    session = MagicMock(spec=Session)
+    settings = MagicMock()
+    resume = MagicMock(spec=Resume)
+    resume_id = uuid4()
+
+    file_path = Path(
+        "local_storage/resumes/stored-resume.pdf"
+    ).resolve()
+
+    resume.storage_path = (
+        "local_storage/resumes/stored-resume.pdf"
+    )
+    resume.original_filename = "Harsha_Resume.pdf"
+    resume.content_type = "application/pdf"
+
+    with patch(
+        "app.services.resume_service.get_settings",
+        return_value=settings,
+    ):
+        with patch(
+            "app.services.resume_service.get_resume_by_id_record",
+            return_value=resume,
+        ) as get_record:
+            with patch(
+                "app.services.resume_service.get_resume_file_path",
+                return_value=file_path,
+            ) as get_file_path:
+                result = get_resume_download(
+                    session=session,
+                    resume_id=resume_id,
+                )
+
+    get_record.assert_called_once_with(
+        session,
+        resume_id,
+    )
+
+    get_file_path.assert_called_once_with(
+        storage_path=resume.storage_path,
+        settings=settings,
+    )
+
+    session.commit.assert_not_called()
+    session.rollback.assert_not_called()
+    session.refresh.assert_not_called()
+
+    assert result.file_path == file_path
+    assert result.filename == "Harsha_Resume.pdf"
+    assert result.content_type == "application/pdf"
+
+
+def test_get_resume_download_maps_missing_physical_file() -> None:
+    session = MagicMock(spec=Session)
+    settings = MagicMock()
+    resume = MagicMock(spec=Resume)
+    resume_id = uuid4()
+
+    resume.storage_path = (
+        "local_storage/resumes/missing-resume.pdf"
+    )
+    resume.original_filename = "Harsha_Resume.pdf"
+    resume.content_type = "application/pdf"
+
+    with patch(
+        "app.services.resume_service.get_settings",
+        return_value=settings,
+    ):
+        with patch(
+            "app.services.resume_service.get_resume_by_id_record",
+            return_value=resume,
+        ):
+            with patch(
+                "app.services.resume_service.get_resume_file_path",
+                side_effect=ResumeFileNotFoundError(
+                    "The Resume file could not be found."
+                ),
+            ):
+                with pytest.raises(AppException) as exc_info:
+                    get_resume_download(
+                        session=session,
+                        resume_id=resume_id,
+                    )
+
+    session.commit.assert_not_called()
+    session.rollback.assert_not_called()
+    session.refresh.assert_not_called()
+
+    assert_app_exception(
+        exc_info.value,
+        expected_status=status.HTTP_404_NOT_FOUND,
+        expected_code="resume_file_not_found",
+        expected_message="The Resume file could not be found.",
+    )
+
+
+def test_get_resume_download_maps_unsafe_storage_path() -> None:
+    session = MagicMock(spec=Session)
+    settings = MagicMock()
+    resume = MagicMock(spec=Resume)
+    resume_id = uuid4()
+
+    resume.storage_path = (
+        "external-storage/resumes/private-resume.pdf"
+    )
+    resume.original_filename = "Harsha_Resume.pdf"
+    resume.content_type = "application/pdf"
+
+    with patch(
+        "app.services.resume_service.get_settings",
+        return_value=settings,
+    ):
+        with patch(
+            "app.services.resume_service.get_resume_by_id_record",
+            return_value=resume,
+        ):
+            with patch(
+                "app.services.resume_service.get_resume_file_path",
+                side_effect=ResumeStorageError(
+                    "The storage path is outside the configured "
+                    "storage directory."
+                ),
+            ):
+                with pytest.raises(AppException) as exc_info:
+                    get_resume_download(
+                        session=session,
+                        resume_id=resume_id,
+                    )
+
+    session.commit.assert_not_called()
+    session.rollback.assert_not_called()
+    session.refresh.assert_not_called()
+
+    assert_app_exception(
+        exc_info.value,
+        expected_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        expected_code="resume_download_failed",
+        expected_message=(
+            "The Resume file could not be downloaded."
+        ),
+    )
+
+    assert "external-storage" not in exc_info.value.message
+    assert resume.storage_path not in exc_info.value.message
 
 
 def test_list_resumes_returns_repository_results() -> None:
