@@ -7,7 +7,7 @@ from fastapi import UploadFile
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
-
+from app.services.resume_service import ResumeDownload
 from app.models.candidate import Candidate
 from app.models.resume import Resume
 from app.core.config import Settings
@@ -522,6 +522,52 @@ def test_get_resume_by_id_rejects_malformed_uuid(
         "resume_id",
     ]
 
+
+def test_download_resume_returns_pdf_file(
+    client: TestClient,
+    tmp_path: Path,
+) -> None:
+    resume_id = uuid4()
+
+    file_path = tmp_path / "stored-resume.pdf"
+    file_path.write_bytes(PDF_BYTES)
+
+    download = ResumeDownload(
+        file_path=file_path,
+        filename="Harsha_Resume.pdf",
+        content_type="application/pdf",
+    )
+
+    with patch(
+        "app.api.routes.resumes.get_resume_download_service",
+        return_value=download,
+    ) as download_service:
+        response = client.get(
+            f"{RESUMES_URL}/{resume_id}/download"
+        )
+
+    download_service.assert_called_once()
+
+    _, call_kwargs = download_service.call_args
+
+    assert call_kwargs["resume_id"] == resume_id
+
+    assert response.status_code == 200
+    assert response.content == PDF_BYTES
+    assert (
+        response.headers["content-type"]
+        == "application/pdf"
+    )
+
+    content_disposition = response.headers[
+        "content-disposition"
+    ]
+
+    assert content_disposition.startswith("attachment;")
+    assert (
+        'filename="Harsha_Resume.pdf"'
+        in content_disposition
+    )
 
 def test_update_resume_sets_primary_and_demotes_previous_primary(
     client: TestClient,
