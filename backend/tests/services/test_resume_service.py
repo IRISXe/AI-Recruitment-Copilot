@@ -41,6 +41,8 @@ def build_create_payload(
         file_size_bytes=245760,
         is_primary=is_primary,
     )
+
+
 def build_uploaded_file() -> UploadFile:
     uploaded_file = MagicMock(spec=UploadFile)
     uploaded_file.filename = "Harsha_Resume.pdf"
@@ -48,6 +50,7 @@ def build_uploaded_file() -> UploadFile:
     uploaded_file.file = MagicMock()
 
     return uploaded_file
+
 
 def assert_app_exception(
     exception: AppException,
@@ -560,27 +563,40 @@ def test_update_resume_rolls_back_database_error() -> None:
     )
 
 
-def test_delete_resume_commits_and_returns_none() -> None:
+def test_delete_resume_commits_and_removes_stored_file() -> None:
     session = MagicMock(spec=Session)
+    settings = MagicMock()
     resume = MagicMock(spec=Resume)
     resume_id = uuid4()
 
+    resume.storage_path = (
+        "local_storage/resumes/stored-resume.pdf"
+    )
+
     with patch(
-        "app.services.resume_service.get_resume_by_id_record",
-        return_value=resume,
-    ) as get_record:
+        "app.services.resume_service.get_settings",
+        return_value=settings,
+    ):
         with patch(
-            "app.services.resume_service.delete_resume_record",
-        ) as delete_record:
-            result = delete_resume(
-                session=session,
-                resume_id=resume_id,
-            )
+            "app.services.resume_service.get_resume_by_id_record",
+            return_value=resume,
+        ) as get_record:
+            with patch(
+                "app.services.resume_service.delete_resume_record",
+            ) as delete_record:
+                with patch(
+                    "app.services.resume_service.delete_resume_file",
+                ) as delete_file:
+                    result = delete_resume(
+                        session=session,
+                        resume_id=resume_id,
+                    )
 
     get_record.assert_called_once_with(
         session,
         resume_id,
     )
+
     delete_record.assert_called_once_with(
         session,
         resume=resume,
@@ -589,31 +605,46 @@ def test_delete_resume_commits_and_returns_none() -> None:
     session.commit.assert_called_once_with()
     session.rollback.assert_not_called()
 
+    delete_file.assert_called_once_with(
+        storage_path=resume.storage_path,
+        settings=settings,
+    )
+
     assert result is None
 
 
 def test_delete_resume_raises_not_found() -> None:
     session = MagicMock(spec=Session)
+    settings = MagicMock()
     resume_id = uuid4()
 
     with patch(
-        "app.services.resume_service.get_resume_by_id_record",
-        return_value=None,
-    ) as get_record:
+        "app.services.resume_service.get_settings",
+        return_value=settings,
+    ):
         with patch(
-            "app.services.resume_service.delete_resume_record",
-        ) as delete_record:
-            with pytest.raises(AppException) as exc_info:
-                delete_resume(
-                    session=session,
-                    resume_id=resume_id,
-                )
+            "app.services.resume_service.get_resume_by_id_record",
+            return_value=None,
+        ) as get_record:
+            with patch(
+                "app.services.resume_service.delete_resume_record",
+            ) as delete_record:
+                with patch(
+                    "app.services.resume_service.delete_resume_file",
+                ) as delete_file:
+                    with pytest.raises(AppException) as exc_info:
+                        delete_resume(
+                            session=session,
+                            resume_id=resume_id,
+                        )
 
     get_record.assert_called_once_with(
         session,
         resume_id,
     )
+
     delete_record.assert_not_called()
+    delete_file.assert_not_called()
 
     session.commit.assert_not_called()
     session.rollback.assert_not_called()
@@ -628,25 +659,40 @@ def test_delete_resume_raises_not_found() -> None:
 
 def test_delete_resume_rolls_back_database_error() -> None:
     session = MagicMock(spec=Session)
+    settings = MagicMock()
     resume = MagicMock(spec=Resume)
     resume_id = uuid4()
 
+    resume.storage_path = (
+        "local_storage/resumes/stored-resume.pdf"
+    )
+
     with patch(
-        "app.services.resume_service.get_resume_by_id_record",
-        return_value=resume,
+        "app.services.resume_service.get_settings",
+        return_value=settings,
     ):
         with patch(
-            "app.services.resume_service.delete_resume_record",
-            side_effect=SQLAlchemyError("database failure"),
+            "app.services.resume_service.get_resume_by_id_record",
+            return_value=resume,
         ):
-            with pytest.raises(AppException) as exc_info:
-                delete_resume(
-                    session=session,
-                    resume_id=resume_id,
-                )
+            with patch(
+                "app.services.resume_service.delete_resume_record",
+                side_effect=SQLAlchemyError(
+                    "database failure"
+                ),
+            ):
+                with patch(
+                    "app.services.resume_service.delete_resume_file",
+                ) as delete_file:
+                    with pytest.raises(AppException) as exc_info:
+                        delete_resume(
+                            session=session,
+                            resume_id=resume_id,
+                        )
 
     session.rollback.assert_called_once_with()
     session.commit.assert_not_called()
+    delete_file.assert_not_called()
 
     assert_app_exception(
         exc_info.value,
@@ -654,6 +700,98 @@ def test_delete_resume_rolls_back_database_error() -> None:
         expected_code="resume_deletion_failed",
         expected_message="The resume could not be deleted.",
     )
+
+
+def test_delete_resume_skips_unmanaged_storage_path() -> None:
+    session = MagicMock(spec=Session)
+    settings = MagicMock()
+    resume = MagicMock(spec=Resume)
+    resume_id = uuid4()
+
+    resume.storage_path = (
+        "external-storage/resumes/resume.pdf"
+    )
+
+    with patch(
+        "app.services.resume_service.get_settings",
+        return_value=settings,
+    ):
+        with patch(
+            "app.services.resume_service.get_resume_by_id_record",
+            return_value=resume,
+        ):
+            with patch(
+                "app.services.resume_service.delete_resume_record",
+            ):
+                with patch(
+                    "app.services.resume_service.delete_resume_file",
+                    side_effect=ResumeStorageError(
+                        "The storage path is outside the "
+                        "configured storage directory."
+                    ),
+                ) as delete_file:
+                    result = delete_resume(
+                        session=session,
+                        resume_id=resume_id,
+                    )
+
+    session.commit.assert_called_once_with()
+    session.rollback.assert_not_called()
+
+    delete_file.assert_called_once_with(
+        storage_path=resume.storage_path,
+        settings=settings,
+    )
+
+    assert result is None
+
+
+def test_delete_resume_reports_file_cleanup_failure() -> None:
+    session = MagicMock(spec=Session)
+    settings = MagicMock()
+    resume = MagicMock(spec=Resume)
+    resume_id = uuid4()
+
+    resume.storage_path = (
+        "local_storage/resumes/stored-resume.pdf"
+    )
+
+    with patch(
+        "app.services.resume_service.get_settings",
+        return_value=settings,
+    ):
+        with patch(
+            "app.services.resume_service.get_resume_by_id_record",
+            return_value=resume,
+        ):
+            with patch(
+                "app.services.resume_service.delete_resume_record",
+            ):
+                with patch(
+                    "app.services.resume_service.delete_resume_file",
+                    side_effect=OSError(
+                        "file is locked"
+                    ),
+                ):
+                    with pytest.raises(AppException) as exc_info:
+                        delete_resume(
+                            session=session,
+                            resume_id=resume_id,
+                        )
+
+    session.commit.assert_called_once_with()
+    session.rollback.assert_not_called()
+
+    assert_app_exception(
+        exc_info.value,
+        expected_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        expected_code="resume_file_cleanup_failed",
+        expected_message=(
+            "The resume metadata was deleted, but its "
+            "stored file could not be removed."
+        ),
+    )
+
 
 def test_upload_resume_stores_file_creates_record_and_commits() -> None:
     session = MagicMock(spec=Session)

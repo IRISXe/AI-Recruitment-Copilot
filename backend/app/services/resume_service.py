@@ -338,6 +338,9 @@ def delete_resume(
     *,
     resume_id: UUID,
 ) -> None:
+    settings = get_settings()
+    storage_path: str
+
     try:
         resume = get_resume_by_id_record(
             session,
@@ -350,6 +353,8 @@ def delete_resume(
                 code="resume_not_found",
                 message="The requested resume does not exist.",
             )
+
+        storage_path = resume.storage_path
 
         delete_resume_record(
             session,
@@ -369,4 +374,32 @@ def delete_resume(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             code="resume_deletion_failed",
             message="The resume could not be deleted.",
+        ) from exc
+
+    try:
+        delete_resume_file(
+            storage_path=storage_path,
+            settings=settings,
+        )
+
+    except ResumeStorageError:
+        logger.warning(
+            "Skipping local file cleanup for unmanaged "
+            "resume storage path: %s",
+            storage_path,
+        )
+
+    except OSError as exc:
+        logger.exception(
+            "The resume metadata was deleted, but its "
+            "stored file could not be removed."
+        )
+
+        raise AppException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            code="resume_file_cleanup_failed",
+            message=(
+                "The resume metadata was deleted, but its "
+                "stored file could not be removed."
+            ),
         ) from exc
