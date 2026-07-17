@@ -1,11 +1,11 @@
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from stat import S_ISREG
 from typing import BinaryIO
 from uuid import uuid4
 from zipfile import BadZipFile, ZipFile, is_zipfile
 
 from app.core.config import Settings
-
 
 CONTENT_TYPE_BY_EXTENSION = {
     ".pdf": "application/pdf",
@@ -20,6 +20,9 @@ READ_CHUNK_SIZE_BYTES = 64 * 1024
 
 class ResumeStorageError(Exception):
     """Base exception for local Resume storage operations."""
+
+class ResumeFileNotFoundError(ResumeStorageError):
+    """Raised when Resume metadata points to a missing physical file."""
 
 
 class InvalidResumeFileError(ResumeStorageError):
@@ -138,6 +141,35 @@ def resolve_resume_file_path(
         )
 
     return resolved_path
+
+def get_resume_file_path(
+    *,
+    storage_path: str,
+    settings: Settings,
+) -> Path:
+    resolved_path = resolve_resume_file_path(
+        storage_path=storage_path,
+        settings=settings,
+    )
+
+    try:
+        file_status = resolved_path.stat()
+    except FileNotFoundError as exc:
+        raise ResumeFileNotFoundError(
+            "The Resume file could not be found."
+        ) from exc
+    except OSError as exc:
+        raise ResumeStorageError(
+            "The Resume file could not be accessed."
+        ) from exc
+
+    if not S_ISREG(file_status.st_mode):
+        raise ResumeStorageError(
+            "The Resume storage path is not a regular file."
+        )
+
+    return resolved_path
+
 
 def delete_resume_file(
     *,

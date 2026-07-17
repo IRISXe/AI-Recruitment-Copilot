@@ -1,15 +1,17 @@
 from io import BytesIO
 from pathlib import Path
 from zipfile import ZipFile
-
+from unittest.mock import patch
 import pytest
 
 from app.core.config import Settings
 from app.storage.resume_storage import (
     InvalidResumeFileError,
+    ResumeFileNotFoundError,
     ResumeFileTooLargeError,
     ResumeStorageError,
     delete_resume_file,
+    get_resume_file_path,
     resolve_resume_file_path,
     store_resume_file,
 )
@@ -304,6 +306,108 @@ def test_resolve_resume_file_path_returns_safe_resolved_path(
     assert resolved_path == stored_file.resolve()
     assert resolved_path.is_file()
 
+def test_get_resume_file_path_returns_existing_regular_file(
+    tmp_path: Path,
+) -> None:
+    settings = build_settings(
+        tmp_path / "resumes",
+    )
+
+    settings.resume_storage_directory.mkdir(
+        parents=True,
+    )
+
+    stored_file = (
+        settings.resume_storage_directory
+        / "stored-resume.pdf"
+    )
+
+    stored_file.write_bytes(
+        b"%PDF-1.4\ncontent"
+    )
+
+    result = get_resume_file_path(
+        storage_path=stored_file.as_posix(),
+        settings=settings,
+    )
+
+    assert result == stored_file.resolve()
+    assert result.is_file()
+
+
+def test_get_resume_file_path_raises_when_file_is_missing(
+    tmp_path: Path,
+) -> None:
+    settings = build_settings(
+        tmp_path / "resumes",
+    )
+
+    missing_file = (
+        settings.resume_storage_directory
+        / "missing-resume.pdf"
+    )
+
+    with pytest.raises(
+        ResumeFileNotFoundError,
+        match="could not be found",
+    ):
+        get_resume_file_path(
+            storage_path=missing_file.as_posix(),
+            settings=settings,
+        )
+
+
+def test_get_resume_file_path_rejects_directory(
+    tmp_path: Path,
+) -> None:
+    settings = build_settings(
+        tmp_path / "resumes",
+    )
+
+    directory_path = (
+        settings.resume_storage_directory
+        / "not-a-file.pdf"
+    )
+
+    directory_path.mkdir(
+        parents=True,
+    )
+
+    with pytest.raises(
+        ResumeStorageError,
+        match="not a regular file",
+    ):
+        get_resume_file_path(
+            storage_path=directory_path.as_posix(),
+            settings=settings,
+        )
+
+
+def test_get_resume_file_path_maps_filesystem_failure(
+    tmp_path: Path,
+) -> None:
+    settings = build_settings(
+        tmp_path / "resumes",
+    )
+
+    stored_file = (
+        settings.resume_storage_directory
+        / "stored-resume.pdf"
+    )
+
+    with patch.object(
+        Path,
+        "stat",
+        side_effect=OSError("filesystem failure"),
+    ):
+        with pytest.raises(
+            ResumeStorageError,
+            match="could not be accessed",
+        ):
+            get_resume_file_path(
+                storage_path=stored_file.as_posix(),
+                settings=settings,
+            )
 
 def test_resolve_resume_file_path_rejects_outside_path(
     tmp_path: Path,
