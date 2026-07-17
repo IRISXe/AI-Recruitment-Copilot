@@ -1,6 +1,15 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Response, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    Query,
+    Response,
+    UploadFile,
+    status,
+)
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -15,6 +24,7 @@ from app.services.resume_service import (
     get_resume_by_id as get_resume_by_id_service,
     list_resumes as list_resumes_service,
     update_resume as update_resume_service,
+    upload_resume as upload_resume_service,
 )
 
 
@@ -25,10 +35,32 @@ router = APIRouter(
 
 
 @router.post(
+    "/upload",
+    response_model=ResumeResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Upload a Resume file",
+)
+def upload_resume(
+    candidate_id: UUID = Form(...),
+    is_primary: bool = Form(default=False),
+    file: UploadFile = File(...),
+    session: Session = Depends(get_db),
+) -> ResumeResponse:
+    resume = upload_resume_service(
+        session,
+        candidate_id=candidate_id,
+        uploaded_file=file,
+        is_primary=is_primary,
+    )
+
+    return ResumeResponse.model_validate(resume)
+
+
+@router.post(
     "",
     response_model=ResumeResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Create resume metadata",
+    summary="Create Resume metadata",
 )
 def create_resume(
     payload: ResumeCreate,
@@ -46,7 +78,7 @@ def create_resume(
     "",
     response_model=list[ResumeResponse],
     status_code=status.HTTP_200_OK,
-    summary="List resumes",
+    summary="List Resumes",
 )
 def list_resumes(
     offset: int = Query(
@@ -80,7 +112,7 @@ def list_resumes(
     "/{resume_id}",
     response_model=ResumeResponse,
     status_code=status.HTTP_200_OK,
-    summary="Get a resume by ID",
+    summary="Get a Resume",
 )
 def get_resume_by_id(
     resume_id: UUID,
@@ -98,7 +130,7 @@ def get_resume_by_id(
     "/{resume_id}",
     response_model=ResumeResponse,
     status_code=status.HTTP_200_OK,
-    summary="Update resume metadata",
+    summary="Update a Resume",
 )
 def update_resume(
     resume_id: UUID,
@@ -117,7 +149,7 @@ def update_resume(
 @router.delete(
     "/{resume_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    summary="Delete resume metadata",
+    summary="Delete a Resume",
 )
 def delete_resume(
     resume_id: UUID,
