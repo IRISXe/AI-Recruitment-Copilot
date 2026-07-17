@@ -1,4 +1,6 @@
 import logging
+from dataclasses import dataclass
+from pathlib import Path
 from uuid import UUID
 
 from fastapi import UploadFile, status
@@ -30,6 +32,12 @@ from app.storage.resume_storage import (
 
 
 logger = logging.getLogger(__name__)
+
+@dataclass(frozen=True)
+class ResumeDownload:
+    file_path: Path
+    filename: str
+    content_type: str
 
 def upload_resume(
     session: Session,
