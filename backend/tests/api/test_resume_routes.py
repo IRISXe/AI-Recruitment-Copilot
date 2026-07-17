@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from unittest.mock import patch
 from uuid import UUID, uuid4
-
+from pathlib import Path
 import pytest
 from fastapi import UploadFile
 from fastapi.testclient import TestClient
@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.models.candidate import Candidate
 from app.models.resume import Resume
-
+from app.core.config import Settings
 
 CANDIDATES_URL = "/api/v1/candidates"
 RESUMES_URL = "/api/v1/resumes"
@@ -913,3 +913,105 @@ def test_upload_resume_requires_file(
     )
 
     upload_service.assert_not_called()
+def test_upload_and_delete_resume_manages_real_local_file(
+    client: TestClient,
+    db_session: Session,
+    tmp_path: Path,
+) -> None:
+    candidate = create_candidate_through_api(client)
+
+    settings = Settings(
+        database_url=(
+            "postgresql+psycopg://"
+            "user:password@localhost/test"
+        ),
+        resume_storage_directory=(
+            tmp_path / "resumes"
+        ),
+    )
+
+    with patch(
+        "app.services.resume_service.get_settings",
+        return_value=settings,
+    ):
+        upload_response = client.post(
+            f"{RESUMES_URL}/upload",
+            data={
+                "candidate_id": str(candidate["id"]),
+                "is_primary": "true",
+            },
+            files={
+                "file": (
+                    "Harsha_Resume.pdf",
+                    PDF_BYTES,
+                    "application/pdf",
+                ),
+            },
+        )
+
+        assert upload_response.status_code == 201
+
+        uploaded_resume = upload_response.json()
+        resume_id = UUID(uploaded_resume["id"])
+        stored_path = Path(
+            uploaded_resume["storage_path"]
+        )
+
+        assert stored_path.exists()
+        assert stored_path.is_file()
+        assert stored_path.read_bytes() == PDF_BYTES
+
+        assert (
+            stored_path.parent
+            == settings.resume_storage_directory
+        )
+
+        assert (
+            uploaded_resume["candidate_id"]
+            == candidate["id"]
+        )
+        assert (
+            uploaded_resume["original_filename"]
+            == "Harsha_Resume.pdf"
+        )
+        assert (
+            uploaded_resume["content_type"]
+            == "application/pdf"
+        )
+        assert (
+            uploaded_resume["file_size_bytes"]
+            == len(PDF_BYTES)
+        )
+        assert uploaded_resume["is_primary"] is True
+
+        db_session.expire_all()
+
+        persisted_resume = db_session.get(
+            Resume,
+            resume_id,
+        )
+
+        assert persisted_resume is not None
+        assert (
+            persisted_resume.storage_path
+            == stored_path.as_posix()
+        )
+
+        delete_response = client.delete(
+            f"{RESUMES_URL}/{resume_id}"
+        )
+
+        assert delete_response.status_code == 204
+        assert delete_response.content == b""
+
+        assert not stored_path.exists()
+
+        db_session.expire_all()
+
+        assert (
+            db_session.get(
+                Resume,
+                resume_id,
+            )
+            is None
+        )
