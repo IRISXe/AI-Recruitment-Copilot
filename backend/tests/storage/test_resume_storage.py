@@ -10,6 +10,7 @@ from app.storage.resume_storage import (
     ResumeFileTooLargeError,
     ResumeStorageError,
     delete_resume_file,
+    resolve_resume_file_path,
     store_resume_file,
 )
 
@@ -273,6 +274,62 @@ def test_store_resume_file_rejects_invalid_docx_contents(
     assert list(
         settings.resume_storage_directory.glob("*")
     ) == []
+
+
+def test_resolve_resume_file_path_returns_safe_resolved_path(
+    tmp_path: Path,
+) -> None:
+    settings = build_settings(
+        tmp_path / "resumes",
+    )
+
+    settings.resume_storage_directory.mkdir(
+        parents=True,
+    )
+
+    stored_file = (
+        settings.resume_storage_directory
+        / "stored-resume.pdf"
+    )
+
+    stored_file.write_bytes(
+        b"%PDF-1.4\ncontent"
+    )
+
+    resolved_path = resolve_resume_file_path(
+        storage_path=stored_file.as_posix(),
+        settings=settings,
+    )
+
+    assert resolved_path == stored_file.resolve()
+    assert resolved_path.is_file()
+
+
+def test_resolve_resume_file_path_rejects_outside_path(
+    tmp_path: Path,
+) -> None:
+    settings = build_settings(
+        tmp_path / "resumes",
+    )
+
+    outside_file = tmp_path / "private-file.pdf"
+
+    outside_file.write_bytes(
+        b"%PDF-1.4\ncontent"
+    )
+
+    with pytest.raises(
+        ResumeStorageError,
+        match=(
+            "outside the configured storage directory"
+        ),
+    ):
+        resolve_resume_file_path(
+            storage_path=outside_file.as_posix(),
+            settings=settings,
+        )
+
+    assert outside_file.exists()
 
 
 def test_delete_resume_file_removes_stored_file(

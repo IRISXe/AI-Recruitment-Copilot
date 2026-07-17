@@ -119,25 +119,37 @@ def store_resume_file(
         file_size_bytes=file_size_bytes,
     )
 
+def resolve_resume_file_path(
+    *,
+    storage_path: str,
+    settings: Settings,
+) -> Path:
+    storage_directory = (
+        settings.resume_storage_directory.resolve()
+    )
+    resolved_path = Path(storage_path).resolve()
+
+    if not resolved_path.is_relative_to(
+        storage_directory
+    ):
+        raise ResumeStorageError(
+            "The storage path is outside the configured "
+            "storage directory."
+        )
+
+    return resolved_path
 
 def delete_resume_file(
     *,
     storage_path: str,
     settings: Settings,
 ) -> None:
-    storage_root = (
-        settings.resume_storage_directory
-        .resolve()
+    resolved_path = resolve_resume_file_path(
+        storage_path=storage_path,
+        settings=settings,
     )
-    target_path = Path(storage_path).resolve()
 
-    if not target_path.is_relative_to(storage_root):
-        raise ResumeStorageError(
-            "The Resume file is outside the configured "
-            "storage directory."
-        )
-
-    target_path.unlink(
+    resolved_path.unlink(
         missing_ok=True,
     )
 
