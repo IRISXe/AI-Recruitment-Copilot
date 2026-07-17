@@ -2,7 +2,7 @@ from unittest.mock import MagicMock, patch
 from uuid import UUID, uuid4
 
 import pytest
-from fastapi import status
+from fastapi import UploadFile, status
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -10,12 +10,19 @@ from app.core.exceptions import AppException
 from app.models.candidate import Candidate
 from app.models.resume import Resume
 from app.schemas.resume import ResumeCreate, ResumeUpdate
+from app.storage.resume_storage import (
+    InvalidResumeFileError,
+    ResumeFileTooLargeError,
+    ResumeStorageError,
+    StoredResumeFile,
+)
 from app.services.resume_service import (
     create_resume,
     delete_resume,
     get_resume_by_id,
     list_resumes,
     update_resume,
+    upload_resume,
 )
 
 
@@ -34,7 +41,13 @@ def build_create_payload(
         file_size_bytes=245760,
         is_primary=is_primary,
     )
+def build_uploaded_file() -> UploadFile:
+    uploaded_file = MagicMock(spec=UploadFile)
+    uploaded_file.filename = "Harsha_Resume.pdf"
+    uploaded_file.content_type = "application/pdf"
+    uploaded_file.file = MagicMock()
 
+    return uploaded_file
 
 def assert_app_exception(
     exception: AppException,
@@ -640,4 +653,394 @@ def test_delete_resume_rolls_back_database_error() -> None:
         expected_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         expected_code="resume_deletion_failed",
         expected_message="The resume could not be deleted.",
+    )
+
+def test_upload_resume_stores_file_creates_record_and_commits() -> None:
+    session = MagicMock(spec=Session)
+    settings = MagicMock()
+    candidate = MagicMock(spec=Candidate)
+    resume = MagicMock(spec=Resume)
+    candidate_id = uuid4()
+    uploaded_file = build_uploaded_file()
+
+    stored_file = StoredResumeFile(
+        original_filename="Harsha_Resume.pdf",
+        stored_filename="stored-resume.pdf",
+        storage_path="local_storage/resumes/stored-resume.pdf",
+        content_type="application/pdf",
+        file_size_bytes=245760,
+    )
+
+    with patch(
+        "app.services.resume_service.get_settings",
+        return_value=settings,
+    ):
+        with patch(
+            "app.services.resume_service.get_candidate_by_id_record",
+            return_value=candidate,
+        ) as get_candidate:
+            with patch(
+                "app.services.resume_service.store_resume_file",
+                return_value=stored_file,
+            ) as store_file:
+                with patch(
+                    "app.services.resume_service."
+                    "get_primary_resume_record",
+                ) as get_primary:
+                    with patch(
+                        "app.services.resume_service."
+                        "create_resume_record",
+                        return_value=resume,
+                    ) as create_record:
+                        result = upload_resume(
+                            session=session,
+                            candidate_id=candidate_id,
+                            uploaded_file=uploaded_file,
+                        )
+
+    get_candidate.assert_called_once_with(
+        session,
+        candidate_id,
+    )
+
+    store_file.assert_called_once_with(
+        file=uploaded_file.file,
+        original_filename=uploaded_file.filename,
+        content_type=uploaded_file.content_type,
+        settings=settings,
+    )
+
+    get_primary.assert_not_called()
+    create_record.assert_called_once()
+
+    create_args = create_record.call_args.args
+
+    assert create_args[0] is session
+
+    created_payload = create_args[1]
+
+    assert created_payload.candidate_id == candidate_id
+    assert (
+        created_payload.original_filename
+        == "Harsha_Resume.pdf"
+    )
+    assert created_payload.stored_filename == "stored-resume.pdf"
+    assert (
+        created_payload.storage_path
+        == "local_storage/resumes/stored-resume.pdf"
+    )
+    assert created_payload.content_type == "application/pdf"
+    assert created_payload.file_size_bytes == 245760
+    assert created_payload.is_primary is False
+
+    session.commit.assert_called_once_with()
+    session.refresh.assert_called_once_with(resume)
+    session.rollback.assert_not_called()
+
+    assert result is resume
+
+
+def test_upload_resume_raises_when_candidate_does_not_exist() -> None:
+    session = MagicMock(spec=Session)
+    settings = MagicMock()
+    candidate_id = uuid4()
+    uploaded_file = build_uploaded_file()
+
+    with patch(
+        "app.services.resume_service.get_settings",
+        return_value=settings,
+    ):
+        with patch(
+            "app.services.resume_service.get_candidate_by_id_record",
+            return_value=None,
+        ) as get_candidate:
+            with patch(
+                "app.services.resume_service.store_resume_file",
+            ) as store_file:
+                with patch(
+                    "app.services.resume_service.create_resume_record",
+                ) as create_record:
+                    with pytest.raises(AppException) as exc_info:
+                        upload_resume(
+                            session=session,
+                            candidate_id=candidate_id,
+                            uploaded_file=uploaded_file,
+                        )
+
+    get_candidate.assert_called_once_with(
+        session,
+        candidate_id,
+    )
+    store_file.assert_not_called()
+    create_record.assert_not_called()
+
+    session.commit.assert_not_called()
+    session.refresh.assert_not_called()
+    session.rollback.assert_not_called()
+
+    assert_app_exception(
+        exc_info.value,
+        expected_status=status.HTTP_404_NOT_FOUND,
+        expected_code="candidate_not_found",
+        expected_message="The requested candidate does not exist.",
+    )
+
+
+def test_upload_primary_resume_demotes_existing_primary() -> None:
+    session = MagicMock(spec=Session)
+    settings = MagicMock()
+    candidate = MagicMock(spec=Candidate)
+    existing_primary = MagicMock(spec=Resume)
+    new_resume = MagicMock(spec=Resume)
+    candidate_id = uuid4()
+    uploaded_file = build_uploaded_file()
+
+    stored_file = StoredResumeFile(
+        original_filename="Harsha_Resume.pdf",
+        stored_filename="stored-primary.pdf",
+        storage_path="local_storage/resumes/stored-primary.pdf",
+        content_type="application/pdf",
+        file_size_bytes=245760,
+    )
+
+    with patch(
+        "app.services.resume_service.get_settings",
+        return_value=settings,
+    ):
+        with patch(
+            "app.services.resume_service.get_candidate_by_id_record",
+            return_value=candidate,
+        ):
+            with patch(
+                "app.services.resume_service.store_resume_file",
+                return_value=stored_file,
+            ):
+                with patch(
+                    "app.services.resume_service."
+                    "get_primary_resume_record",
+                    return_value=existing_primary,
+                ) as get_primary:
+                    with patch(
+                        "app.services.resume_service."
+                        "update_resume_record",
+                        return_value=existing_primary,
+                    ) as update_record:
+                        with patch(
+                            "app.services.resume_service."
+                            "create_resume_record",
+                            return_value=new_resume,
+                        ) as create_record:
+                            result = upload_resume(
+                                session=session,
+                                candidate_id=candidate_id,
+                                uploaded_file=uploaded_file,
+                                is_primary=True,
+                            )
+
+    get_primary.assert_called_once_with(
+        session,
+        candidate_id,
+    )
+
+    update_record.assert_called_once()
+
+    update_args, update_kwargs = update_record.call_args
+
+    assert update_args == (session,)
+    assert update_kwargs["resume"] is existing_primary
+    assert update_kwargs["payload"].is_primary is False
+
+    create_record.assert_called_once()
+    created_payload = create_record.call_args.args[1]
+
+    assert created_payload.is_primary is True
+
+    session.commit.assert_called_once_with()
+    session.refresh.assert_called_once_with(new_resume)
+    session.rollback.assert_not_called()
+
+    assert result is new_resume
+
+
+def test_upload_resume_maps_invalid_file_error() -> None:
+    session = MagicMock(spec=Session)
+    settings = MagicMock()
+    candidate = MagicMock(spec=Candidate)
+    candidate_id = uuid4()
+    uploaded_file = build_uploaded_file()
+
+    with patch(
+        "app.services.resume_service.get_settings",
+        return_value=settings,
+    ):
+        with patch(
+            "app.services.resume_service.get_candidate_by_id_record",
+            return_value=candidate,
+        ):
+            with patch(
+                "app.services.resume_service.store_resume_file",
+                side_effect=InvalidResumeFileError(
+                    "Only PDF and DOCX Resume files are allowed."
+                ),
+            ):
+                with pytest.raises(AppException) as exc_info:
+                    upload_resume(
+                        session=session,
+                        candidate_id=candidate_id,
+                        uploaded_file=uploaded_file,
+                    )
+
+    session.rollback.assert_called_once_with()
+    session.commit.assert_not_called()
+    session.refresh.assert_not_called()
+
+    assert_app_exception(
+        exc_info.value,
+        expected_status=status.HTTP_400_BAD_REQUEST,
+        expected_code="invalid_resume_file",
+        expected_message=(
+            "Only PDF and DOCX Resume files are allowed."
+        ),
+    )
+
+
+def test_upload_resume_maps_file_too_large_error() -> None:
+    session = MagicMock(spec=Session)
+    settings = MagicMock()
+    candidate = MagicMock(spec=Candidate)
+    candidate_id = uuid4()
+    uploaded_file = build_uploaded_file()
+
+    with patch(
+        "app.services.resume_service.get_settings",
+        return_value=settings,
+    ):
+        with patch(
+            "app.services.resume_service.get_candidate_by_id_record",
+            return_value=candidate,
+        ):
+            with patch(
+                "app.services.resume_service.store_resume_file",
+                side_effect=ResumeFileTooLargeError(
+                    "File too large."
+                ),
+            ):
+                with pytest.raises(AppException) as exc_info:
+                    upload_resume(
+                        session=session,
+                        candidate_id=candidate_id,
+                        uploaded_file=uploaded_file,
+                    )
+
+    session.rollback.assert_called_once_with()
+    session.commit.assert_not_called()
+    session.refresh.assert_not_called()
+
+    assert_app_exception(
+        exc_info.value,
+        expected_status=status.HTTP_413_CONTENT_TOO_LARGE,
+        expected_code="resume_file_too_large",
+        expected_message=(
+            "The Resume file exceeds the maximum allowed size."
+        ),
+    )
+
+
+def test_upload_resume_maps_storage_error() -> None:
+    session = MagicMock(spec=Session)
+    settings = MagicMock()
+    candidate = MagicMock(spec=Candidate)
+    candidate_id = uuid4()
+    uploaded_file = build_uploaded_file()
+
+    with patch(
+        "app.services.resume_service.get_settings",
+        return_value=settings,
+    ):
+        with patch(
+            "app.services.resume_service.get_candidate_by_id_record",
+            return_value=candidate,
+        ):
+            with patch(
+                "app.services.resume_service.store_resume_file",
+                side_effect=ResumeStorageError(
+                    "Storage failure."
+                ),
+            ):
+                with pytest.raises(AppException) as exc_info:
+                    upload_resume(
+                        session=session,
+                        candidate_id=candidate_id,
+                        uploaded_file=uploaded_file,
+                    )
+
+    session.rollback.assert_called_once_with()
+    session.commit.assert_not_called()
+    session.refresh.assert_not_called()
+
+    assert_app_exception(
+        exc_info.value,
+        expected_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        expected_code="resume_storage_failed",
+        expected_message="The Resume file could not be stored.",
+    )
+
+
+def test_upload_resume_removes_file_after_database_error() -> None:
+    session = MagicMock(spec=Session)
+    settings = MagicMock()
+    candidate = MagicMock(spec=Candidate)
+    candidate_id = uuid4()
+    uploaded_file = build_uploaded_file()
+
+    stored_file = StoredResumeFile(
+        original_filename="Harsha_Resume.pdf",
+        stored_filename="orphan-resume.pdf",
+        storage_path="local_storage/resumes/orphan-resume.pdf",
+        content_type="application/pdf",
+        file_size_bytes=245760,
+    )
+
+    with patch(
+        "app.services.resume_service.get_settings",
+        return_value=settings,
+    ):
+        with patch(
+            "app.services.resume_service.get_candidate_by_id_record",
+            return_value=candidate,
+        ):
+            with patch(
+                "app.services.resume_service.store_resume_file",
+                return_value=stored_file,
+            ):
+                with patch(
+                    "app.services.resume_service.create_resume_record",
+                    side_effect=SQLAlchemyError(
+                        "database failure"
+                    ),
+                ):
+                    with patch(
+                        "app.services.resume_service.delete_resume_file",
+                    ) as delete_file:
+                        with pytest.raises(AppException) as exc_info:
+                            upload_resume(
+                                session=session,
+                                candidate_id=candidate_id,
+                                uploaded_file=uploaded_file,
+                            )
+
+    session.rollback.assert_called_once_with()
+    session.commit.assert_not_called()
+    session.refresh.assert_not_called()
+
+    delete_file.assert_called_once_with(
+        storage_path=stored_file.storage_path,
+        settings=settings,
+    )
+
+    assert_app_exception(
+        exc_info.value,
+        expected_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        expected_code="resume_upload_failed",
+        expected_message="The Resume could not be uploaded.",
     )
