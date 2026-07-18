@@ -12,6 +12,7 @@ from app.models.application import Application
 from app.models.candidate import Candidate
 from app.models.job import Job
 from app.models.resume import Resume
+from app.models.resume_content import ResumeContent
 
 
 @pytest.fixture
@@ -19,9 +20,10 @@ def db_connection() -> Generator[Connection, None, None]:
     connection = engine.connect()
     transaction = connection.begin()
 
-    # Tests begin with empty resumes, applications, candidates, and jobs tables.
-    # Existing development rows are restored when the outer
-    # transaction is rolled back.
+    # Tests begin with empty Resume content, resumes, applications,
+    # candidates, and jobs tables. Existing development rows are
+    # restored when the outer transaction is rolled back.
+    connection.execute(delete(ResumeContent))
     connection.execute(delete(Resume))
     connection.execute(delete(Application))
     connection.execute(delete(Candidate))
