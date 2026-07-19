@@ -1,3 +1,5 @@
+from datetime import date
+
 import pytest
 
 from app.parsing.resume_parser import (
@@ -5,6 +7,7 @@ from app.parsing.resume_parser import (
     LOCATION_PATTERN,
     PARSER_VERSION,
     ResumeParsingError,
+    calculate_total_experience_months,
     extract_current_role,
     extract_email,
     extract_experience_highlight,
@@ -19,9 +22,12 @@ from app.parsing.resume_parser import (
     normalize_lines,
     normalize_section_heading,
     parse_experience_date_range,
+    parse_experience_month,
     parse_resume_text,
     split_resume_sections,
+    to_month_index,
 )
+from app.schemas.resume_profile import ResumeExperienceEntry
 
 
 def test_parser_version_identifies_rule_based_parser() -> None:
@@ -170,18 +176,21 @@ def test_normalize_section_heading_maps_heading_aliases() -> None:
         )
         == "summary"
     )
+
     assert (
         normalize_section_heading(
             "WORK EXPERIENCE"
         )
         == "experience"
     )
+
     assert (
         normalize_section_heading(
             "Technical Skills"
         )
         == "skills"
     )
+
     assert normalize_section_heading(
         "Backend Developer"
     ) is None
@@ -205,12 +214,15 @@ def test_split_resume_sections_groups_content_by_heading() -> None:
         "Harsha Vardhan",
         "harsha@example.com",
     ]
+
     assert sections["summary"] == [
         "Backend developer experienced in API development.",
     ]
+
     assert sections["skills"] == [
         "Python, FastAPI and PostgreSQL",
     ]
+
     assert sections["education"] == [
         "Bachelor of Technology",
     ]
@@ -428,6 +440,7 @@ def test_extract_work_experience_returns_structured_entry(
     assert entry.start_date == "January 2024"
     assert entry.end_date == "Present"
     assert entry.is_current is True
+
     assert entry.highlights == [
         "Built REST APIs",
         "Improved automated test coverage",
@@ -507,7 +520,213 @@ def test_parse_resume_text_extracts_work_experience() -> None:
     assert experience.start_date == "January 2024"
     assert experience.end_date == "Present"
     assert experience.is_current is True
+
     assert experience.highlights == [
         "Built REST APIs using FastAPI",
         "Worked with PostgreSQL",
     ]
+
+
+def test_to_month_index_returns_sequential_index() -> None:
+    assert to_month_index(2024, 1) == 24288
+    assert to_month_index(2024, 2) == 24289
+
+
+def test_parse_experience_month_parses_month_and_year() -> None:
+    result = parse_experience_month(
+        "January 2024",
+        is_end=False,
+    )
+
+    assert result == to_month_index(
+        2024,
+        1,
+    )
+
+
+@pytest.mark.parametrize(
+    (
+        "is_end",
+        "expected_month",
+    ),
+    [
+        (
+            False,
+            1,
+        ),
+        (
+            True,
+            12,
+        ),
+    ],
+)
+def test_parse_experience_month_handles_year_only_values(
+    is_end: bool,
+    expected_month: int,
+) -> None:
+    result = parse_experience_month(
+        "2024",
+        is_end=is_end,
+    )
+
+    assert result == to_month_index(
+        2024,
+        expected_month,
+    )
+
+
+def test_parse_experience_month_uses_reference_date_for_present(
+) -> None:
+    result = parse_experience_month(
+        "Present",
+        is_end=True,
+        reference_date=date(
+            2026,
+            7,
+            19,
+        ),
+    )
+
+    assert result == to_month_index(
+        2026,
+        7,
+    )
+
+
+def test_parse_experience_month_returns_none_for_invalid_value(
+) -> None:
+    assert parse_experience_month(
+        "Two years ago",
+        is_end=False,
+    ) is None
+
+
+def test_calculate_total_experience_months_counts_single_entry(
+) -> None:
+    entries = [
+        ResumeExperienceEntry(
+            company="Acme Technologies",
+            role="Backend Developer",
+            start_date="January 2024",
+            end_date="December 2024",
+        ),
+    ]
+
+    result = calculate_total_experience_months(
+        entries
+    )
+
+    assert result == 12
+
+
+def test_calculate_total_experience_months_merges_overlaps(
+) -> None:
+    entries = [
+        ResumeExperienceEntry(
+            company="Acme Technologies",
+            start_date="January 2022",
+            end_date="December 2022",
+        ),
+        ResumeExperienceEntry(
+            company="Beta Systems",
+            start_date="July 2022",
+            end_date="June 2023",
+        ),
+    ]
+
+    result = calculate_total_experience_months(
+        entries
+    )
+
+    assert result == 18
+
+
+def test_calculate_total_experience_months_handles_current_role(
+) -> None:
+    entries = [
+        ResumeExperienceEntry(
+            company="Acme Technologies",
+            start_date="January 2024",
+            end_date="Present",
+            is_current=True,
+        ),
+    ]
+
+    result = calculate_total_experience_months(
+        entries,
+        reference_date=date(
+            2024,
+            12,
+            15,
+        ),
+    )
+
+    assert result == 12
+
+
+def test_calculate_total_experience_months_ignores_invalid_entries(
+) -> None:
+    entries = [
+        ResumeExperienceEntry(
+            company="Invalid Company",
+            start_date="Unknown",
+            end_date="Present",
+        ),
+        ResumeExperienceEntry(
+            company="Acme Technologies",
+            start_date="January 2024",
+            end_date="March 2024",
+        ),
+    ]
+
+    result = calculate_total_experience_months(
+        entries,
+        reference_date=date(
+            2026,
+            7,
+            19,
+        ),
+    )
+
+    assert result == 3
+
+
+def test_calculate_total_experience_months_returns_none_without_valid_dates(
+) -> None:
+    entries = [
+        ResumeExperienceEntry(
+            company="Acme Technologies",
+            role="Backend Developer",
+        ),
+    ]
+
+    assert calculate_total_experience_months(
+        entries
+    ) is None
+
+
+def test_parse_resume_text_calculates_overlap_safe_experience(
+) -> None:
+    text = """
+    Harsha Vardhan
+    harsha@example.com
+
+    Work Experience
+    Company: Acme Technologies
+    Role: Backend Developer
+    January 2022 - December 2022
+    - Built REST APIs
+
+    Company: Beta Systems
+    Role: Frontend Developer
+    July 2022 - June 2023
+    - Developed React applications
+
+    Skills
+    Python, FastAPI and React.js
+    """
+
+    profile = parse_resume_text(text)
+
+    assert len(profile.work_experience) == 2
+    assert profile.total_experience_months == 18

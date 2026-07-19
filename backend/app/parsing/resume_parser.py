@@ -1,3 +1,4 @@
+from datetime import date
 import re
 
 from app.schemas.resume_profile import (
@@ -95,6 +96,33 @@ CURRENT_END_DATE_VALUES = {
     "ongoing",
     "now",
 }
+
+MONTH_NAME_TO_NUMBER = {
+    "jan": 1,
+    "feb": 2,
+    "mar": 3,
+    "apr": 4,
+    "may": 5,
+    "jun": 6,
+    "jul": 7,
+    "aug": 8,
+    "sep": 9,
+    "oct": 10,
+    "nov": 11,
+    "dec": 12,
+}
+
+MONTH_YEAR_PATTERN = re.compile(
+    (
+        r"^(?P<month>[A-Za-z]{3,9})"
+        r"\s+(?P<year>\d{4})$"
+    ),
+    flags=re.IGNORECASE,
+)
+
+YEAR_ONLY_PATTERN = re.compile(
+    r"^(?P<year>\d{4})$"
+)
 
 EXPERIENCE_HIGHLIGHT_PREFIXES = (
     "-",
@@ -220,7 +248,6 @@ def normalize_phone(
     phone: str,
 ) -> str | None:
     normalized_phone = phone.strip()
-
     has_plus_prefix = normalized_phone.startswith("+")
 
     digits = re.sub(
@@ -325,7 +352,10 @@ def extract_full_name(
         ):
             continue
 
-        if any(character.isdigit() for character in normalized_line):
+        if any(
+            character.isdigit()
+            for character in normalized_line
+        ):
             continue
 
         words = normalized_line.split()
@@ -476,16 +506,6 @@ def extract_work_experience(
 
     entries: list[ResumeExperienceEntry] = []
 
-    current_entry: dict[str, object] = {
-        "company": None,
-        "role": None,
-        "location": None,
-        "start_date": None,
-        "end_date": None,
-        "is_current": False,
-        "highlights": [],
-    }
-
     def create_empty_entry() -> dict[str, object]:
         return {
             "company": None,
@@ -496,6 +516,8 @@ def extract_work_experience(
             "is_current": False,
             "highlights": [],
         }
+
+    current_entry = create_empty_entry()
 
     def flush_current_entry() -> None:
         nonlocal current_entry
@@ -601,6 +623,160 @@ def extract_work_experience(
     return entries
 
 
+def to_month_index(
+    year: int,
+    month: int,
+) -> int:
+    return year * 12 + month - 1
+
+
+def parse_experience_month(
+    value: str,
+    *,
+    is_end: bool,
+    reference_date: date | None = None,
+) -> int | None:
+    normalized_value = value.strip()
+
+    if not normalized_value:
+        return None
+
+    if is_current_end_date(normalized_value):
+        effective_date = reference_date or date.today()
+
+        return to_month_index(
+            effective_date.year,
+            effective_date.month,
+        )
+
+    month_year_match = MONTH_YEAR_PATTERN.match(
+        normalized_value
+    )
+
+    if month_year_match is not None:
+        month_name = (
+            month_year_match
+            .group("month")
+            .lower()[:3]
+        )
+
+        month_number = MONTH_NAME_TO_NUMBER.get(
+            month_name
+        )
+
+        if month_number is None:
+            return None
+
+        year = int(
+            month_year_match.group("year")
+        )
+
+        return to_month_index(
+            year,
+            month_number,
+        )
+
+    year_only_match = YEAR_ONLY_PATTERN.match(
+        normalized_value
+    )
+
+    if year_only_match is not None:
+        year = int(
+            year_only_match.group("year")
+        )
+
+        month = 12 if is_end else 1
+
+        return to_month_index(
+            year,
+            month,
+        )
+
+    return None
+
+
+def calculate_total_experience_months(
+    entries: list[ResumeExperienceEntry],
+    *,
+    reference_date: date | None = None,
+) -> int | None:
+    intervals: list[tuple[int, int]] = []
+
+    for entry in entries:
+        if (
+            entry.start_date is None
+            or entry.end_date is None
+        ):
+            continue
+
+        start_month = parse_experience_month(
+            entry.start_date,
+            is_end=False,
+            reference_date=reference_date,
+        )
+
+        end_month = parse_experience_month(
+            entry.end_date,
+            is_end=True,
+            reference_date=reference_date,
+        )
+
+        if (
+            start_month is None
+            or end_month is None
+            or end_month < start_month
+        ):
+            continue
+
+        intervals.append(
+            (
+                start_month,
+                end_month,
+            )
+        )
+
+    if not intervals:
+        return None
+
+    intervals.sort(
+        key=lambda interval: interval[0]
+    )
+
+    merged_intervals: list[list[int]] = []
+
+    for start_month, end_month in intervals:
+        if not merged_intervals:
+            merged_intervals.append(
+                [
+                    start_month,
+                    end_month,
+                ]
+            )
+            continue
+
+        previous_interval = merged_intervals[-1]
+        previous_end = previous_interval[1]
+
+        if start_month <= previous_end + 1:
+            previous_interval[1] = max(
+                previous_end,
+                end_month,
+            )
+            continue
+
+        merged_intervals.append(
+            [
+                start_month,
+                end_month,
+            ]
+        )
+
+    return sum(
+        end_month - start_month + 1
+        for start_month, end_month in merged_intervals
+    )
+
+
 def parse_resume_text(
     text: str,
 ) -> ResumeProfileData:
@@ -614,6 +790,10 @@ def parse_resume_text(
     lines = normalize_lines(normalized_text)
     sections = split_resume_sections(lines)
 
+    work_experience = extract_work_experience(
+        sections
+    )
+
     return ResumeProfileData(
         full_name=extract_full_name(lines),
         email=extract_email(normalized_text),
@@ -623,12 +803,14 @@ def parse_resume_text(
         professional_summary=extract_professional_summary(
             sections
         ),
-        total_experience_months=None,
+        total_experience_months=(
+            calculate_total_experience_months(
+                work_experience
+            )
+        ),
         skills=extract_skills(normalized_text),
         education=[],
-        work_experience=extract_work_experience(
-            sections
-        ),
+        work_experience=work_experience,
         projects=[],
         certifications=[],
         languages=[],
