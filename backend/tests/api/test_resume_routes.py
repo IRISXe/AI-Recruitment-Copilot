@@ -1,17 +1,27 @@
 from datetime import UTC, datetime
+from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
 from uuid import UUID, uuid4
 
 import pytest
+from docx import Document
 from fastapi import UploadFile, status
 from fastapi.testclient import TestClient
+from pypdf import PdfWriter
+from pypdf.generic import (
+    DecodedStreamObject,
+    DictionaryObject,
+    NameObject,
+)
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.core.exceptions import AppException
+from app.extraction.resume_extractor import EXTRACTOR_VERSION
 from app.models.resume import Resume
+from app.models.resume_content import ResumeContent
 from app.services.resume_service import ResumeDownload
 
 
@@ -24,6 +34,11 @@ DOCX_CONTENT_TYPE = (
     "application/vnd.openxmlformats-officedocument."
     "wordprocessingml.document"
 )
+
+PDF_EXTRACTED_TEXT = (
+    "Harsha Vardhan Backend Developer Python FastAPI PostgreSQL"
+)
+
 
 
 def valid_candidate_payload(
@@ -1099,6 +1114,8 @@ def test_upload_resume_requires_file(
     )
 
     upload_service.assert_not_called()
+
+
 def test_upload_download_and_delete_resume_manages_real_file(
     client: TestClient,
     db_session: Session,
@@ -1216,3 +1233,493 @@ def test_upload_download_and_delete_resume_manages_real_file(
             )
             is None
         )
+
+
+def build_completed_resume_content(
+
+    *,
+    resume_id: UUID,
+    extracted_text: str = "Backend Developer",
+) -> ResumeContent:
+    timestamp = datetime.now(UTC)
+
+    return ResumeContent(
+        id=uuid4(),
+        resume_id=resume_id,
+        extracted_text=extracted_text,
+        extraction_status="completed",
+        extraction_error=None,
+        extractor_version=EXTRACTOR_VERSION,
+        extracted_at=timestamp,
+        created_at=timestamp,
+        updated_at=timestamp,
+    )
+
+
+def build_extractable_pdf_bytes() -> bytes:
+    buffer = BytesIO()
+    writer = PdfWriter()
+
+    page = writer.add_blank_page(
+        width=612,
+        height=792,
+    )
+
+    font = DictionaryObject(
+        {
+            NameObject("/Type"): NameObject("/Font"),
+            NameObject("/Subtype"): NameObject("/Type1"),
+            NameObject("/BaseFont"): NameObject("/Helvetica"),
+        }
+    )
+
+    font_reference = writer._add_object(font)
+
+    resources = DictionaryObject(
+        {
+            NameObject("/Font"): DictionaryObject(
+                {
+                    NameObject("/F1"): font_reference,
+                }
+            ),
+        }
+    )
+
+    page[NameObject("/Resources")] = resources
+
+    content_stream = DecodedStreamObject()
+    content_stream.set_data(
+        (
+            "BT "
+            "/F1 12 Tf "
+            "72 720 Td "
+            f"({PDF_EXTRACTED_TEXT}) Tj "
+            "ET"
+        ).encode("latin-1")
+    )
+
+    page[NameObject("/Contents")] = writer._add_object(
+        content_stream
+    )
+
+    writer.write(buffer)
+
+    return buffer.getvalue()
+
+
+def build_extractable_docx_bytes() -> bytes:
+    buffer = BytesIO()
+    document = Document()
+
+    document.add_paragraph("Harsha Vardhan")
+    document.add_paragraph("Frontend Developer")
+    document.add_paragraph("React TypeScript FastAPI")
+
+    table = document.add_table(
+        rows=1,
+        cols=2,
+    )
+
+    table.cell(0, 0).text = "Experience"
+    table.cell(0, 1).text = "18 months"
+
+    document.save(buffer)
+
+    return buffer.getvalue()
+
+
+def test_extract_resume_content_returns_completed_content(
+    client: TestClient,
+) -> None:
+    resume_id = uuid4()
+
+    content = build_completed_resume_content(
+        resume_id=resume_id,
+        extracted_text="Python FastAPI PostgreSQL",
+    )
+
+    with patch(
+        "app.api.routes.resumes.extract_resume_content_service",
+        return_value=content,
+    ) as extract_service:
+        response = client.post(
+            f"{RESUMES_URL}/{resume_id}/extract"
+        )
+
+    assert response.status_code == 200
+
+    extract_service.assert_called_once()
+
+    _, call_kwargs = extract_service.call_args
+
+    assert call_kwargs["resume_id"] == resume_id
+
+    body = response.json()
+
+    assert body["id"] == str(content.id)
+    assert body["resume_id"] == str(resume_id)
+    assert body["extracted_text"] == "Python FastAPI PostgreSQL"
+    assert body["extraction_status"] == "completed"
+    assert body["extraction_error"] is None
+    assert body["extractor_version"] == EXTRACTOR_VERSION
+    assert body["extracted_at"] is not None
+    assert body["created_at"] is not None
+    assert body["updated_at"] is not None
+
+
+@pytest.mark.parametrize(
+    (
+        "expected_status",
+        "expected_code",
+        "expected_message",
+    ),
+    [
+        (
+            status.HTTP_404_NOT_FOUND,
+            "resume_not_found",
+            "The requested resume does not exist.",
+        ),
+        (
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "resume_extraction_failed",
+            "The Resume text could not be extracted.",
+        ),
+    ],
+)
+def test_extract_resume_content_returns_service_error(
+    client: TestClient,
+    expected_status: int,
+    expected_code: str,
+    expected_message: str,
+) -> None:
+    resume_id = uuid4()
+
+    with patch(
+        "app.api.routes.resumes.extract_resume_content_service",
+        side_effect=AppException(
+            status_code=expected_status,
+            code=expected_code,
+            message=expected_message,
+        ),
+    ):
+        response = client.post(
+            f"{RESUMES_URL}/{resume_id}/extract"
+        )
+
+    assert response.status_code == expected_status
+    assert response.json() == {
+        "error": {
+            "code": expected_code,
+            "message": expected_message,
+            "details": None,
+        }
+    }
+
+
+def test_extract_resume_content_rejects_malformed_uuid(
+    client: TestClient,
+) -> None:
+    with patch(
+        "app.api.routes.resumes.extract_resume_content_service",
+    ) as extract_service:
+        response = client.post(
+            f"{RESUMES_URL}/not-a-valid-uuid/extract"
+        )
+
+    assert response.status_code == 422
+    assert (
+        response.json()["error"]["code"]
+        == "validation_error"
+    )
+
+    assert response.json()["error"]["details"][0]["loc"] == [
+        "path",
+        "resume_id",
+    ]
+
+    extract_service.assert_not_called()
+
+
+def test_get_resume_content_returns_completed_content(
+    client: TestClient,
+) -> None:
+    resume_id = uuid4()
+
+    content = build_completed_resume_content(
+        resume_id=resume_id,
+        extracted_text="React TypeScript FastAPI",
+    )
+
+    with patch(
+        "app.api.routes.resumes.get_resume_content_service",
+        return_value=content,
+    ) as get_content_service:
+        response = client.get(
+            f"{RESUMES_URL}/{resume_id}/content"
+        )
+
+    assert response.status_code == 200
+
+    get_content_service.assert_called_once()
+
+    _, call_kwargs = get_content_service.call_args
+
+    assert call_kwargs["resume_id"] == resume_id
+
+    body = response.json()
+
+    assert body["id"] == str(content.id)
+    assert body["resume_id"] == str(resume_id)
+    assert body["extracted_text"] == "React TypeScript FastAPI"
+    assert body["extraction_status"] == "completed"
+    assert body["extraction_error"] is None
+    assert body["extractor_version"] == EXTRACTOR_VERSION
+
+
+def test_get_resume_content_returns_404_when_not_extracted(
+    client: TestClient,
+) -> None:
+    resume_id = uuid4()
+
+    with patch(
+        "app.api.routes.resumes.get_resume_content_service",
+        side_effect=AppException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            code="resume_content_not_found",
+            message=(
+                "Extracted content does not exist "
+                "for the requested resume."
+            ),
+        ),
+    ):
+        response = client.get(
+            f"{RESUMES_URL}/{resume_id}/content"
+        )
+
+    assert response.status_code == 404
+    assert response.json() == {
+        "error": {
+            "code": "resume_content_not_found",
+            "message": (
+                "Extracted content does not exist "
+                "for the requested resume."
+            ),
+            "details": None,
+        }
+    }
+
+
+def test_get_resume_content_rejects_malformed_uuid(
+    client: TestClient,
+) -> None:
+    with patch(
+        "app.api.routes.resumes.get_resume_content_service",
+    ) as get_content_service:
+        response = client.get(
+            f"{RESUMES_URL}/not-a-valid-uuid/content"
+        )
+
+    assert response.status_code == 422
+    assert (
+        response.json()["error"]["code"]
+        == "validation_error"
+    )
+
+    assert response.json()["error"]["details"][0]["loc"] == [
+        "path",
+        "resume_id",
+    ]
+
+    get_content_service.assert_not_called()
+
+
+def test_upload_extract_reextract_and_get_real_pdf_content(
+    client: TestClient,
+    db_session: Session,
+    tmp_path: Path,
+) -> None:
+    candidate = create_candidate_through_api(client)
+    pdf_bytes = build_extractable_pdf_bytes()
+
+    settings = Settings(
+        database_url=(
+            "postgresql+psycopg://"
+            "user:password@localhost/test"
+        ),
+        resume_storage_directory=(
+            tmp_path / "pdf-resumes"
+        ),
+    )
+
+    with (
+        patch(
+            "app.services.resume_service.get_settings",
+            return_value=settings,
+        ),
+        patch(
+            "app.services.resume_content_service.get_settings",
+            return_value=settings,
+        ),
+    ):
+        upload_response = client.post(
+            f"{RESUMES_URL}/upload",
+            data={
+                "candidate_id": str(candidate["id"]),
+                "is_primary": "true",
+            },
+            files={
+                "file": (
+                    "Harsha_Resume.pdf",
+                    pdf_bytes,
+                    "application/pdf",
+                ),
+            },
+        )
+
+        assert upload_response.status_code == 201
+
+        resume_id = UUID(
+            upload_response.json()["id"]
+        )
+
+        first_extract_response = client.post(
+            f"{RESUMES_URL}/{resume_id}/extract"
+        )
+
+        second_extract_response = client.post(
+            f"{RESUMES_URL}/{resume_id}/extract"
+        )
+
+        content_response = client.get(
+            f"{RESUMES_URL}/{resume_id}/content"
+        )
+
+    assert first_extract_response.status_code == 200
+    assert second_extract_response.status_code == 200
+    assert content_response.status_code == 200
+
+    first_body = first_extract_response.json()
+    second_body = second_extract_response.json()
+    content_body = content_response.json()
+
+    assert first_body["resume_id"] == str(resume_id)
+    assert first_body["extraction_status"] == "completed"
+    assert first_body["extracted_text"] == PDF_EXTRACTED_TEXT
+    assert first_body["extraction_error"] is None
+    assert first_body["extractor_version"] == EXTRACTOR_VERSION
+
+    assert second_body["id"] == first_body["id"]
+    assert second_body["extraction_status"] == "completed"
+    assert second_body["extracted_text"] == PDF_EXTRACTED_TEXT
+
+    assert content_body["id"] == first_body["id"]
+    assert content_body["resume_id"] == str(resume_id)
+    assert content_body["extracted_text"] == PDF_EXTRACTED_TEXT
+    assert content_body["extraction_status"] == "completed"
+
+    db_session.expire_all()
+
+    persisted_content = db_session.scalar(
+        select(ResumeContent).where(
+            ResumeContent.resume_id == resume_id
+        )
+    )
+
+    assert persisted_content is not None
+    assert persisted_content.id == UUID(first_body["id"])
+    assert persisted_content.extracted_text == PDF_EXTRACTED_TEXT
+    assert persisted_content.extraction_status == "completed"
+    assert persisted_content.extraction_error is None
+
+
+def test_upload_extract_and_get_real_docx_content(
+    client: TestClient,
+    db_session: Session,
+    tmp_path: Path,
+) -> None:
+    candidate = create_candidate_through_api(client)
+    docx_bytes = build_extractable_docx_bytes()
+
+    settings = Settings(
+        database_url=(
+            "postgresql+psycopg://"
+            "user:password@localhost/test"
+        ),
+        resume_storage_directory=(
+            tmp_path / "docx-resumes"
+        ),
+    )
+
+    with (
+        patch(
+            "app.services.resume_service.get_settings",
+            return_value=settings,
+        ),
+        patch(
+            "app.services.resume_content_service.get_settings",
+            return_value=settings,
+        ),
+    ):
+        upload_response = client.post(
+            f"{RESUMES_URL}/upload",
+            data={
+                "candidate_id": str(candidate["id"]),
+                "is_primary": "false",
+            },
+            files={
+                "file": (
+                    "Harsha_Resume.docx",
+                    docx_bytes,
+                    DOCX_CONTENT_TYPE,
+                ),
+            },
+        )
+
+        assert upload_response.status_code == 201
+
+        resume_id = UUID(
+            upload_response.json()["id"]
+        )
+
+        extract_response = client.post(
+            f"{RESUMES_URL}/{resume_id}/extract"
+        )
+
+        content_response = client.get(
+            f"{RESUMES_URL}/{resume_id}/content"
+        )
+
+    assert extract_response.status_code == 200
+    assert content_response.status_code == 200
+
+    extracted_body = extract_response.json()
+    content_body = content_response.json()
+
+    assert extracted_body["resume_id"] == str(resume_id)
+    assert extracted_body["extraction_status"] == "completed"
+    assert extracted_body["extraction_error"] is None
+    assert extracted_body["extractor_version"] == EXTRACTOR_VERSION
+
+    extracted_text = extracted_body["extracted_text"]
+
+    assert "Harsha Vardhan" in extracted_text
+    assert "Frontend Developer" in extracted_text
+    assert "React TypeScript FastAPI" in extracted_text
+    assert "Experience" in extracted_text
+    assert "18 months" in extracted_text
+
+    assert content_body["id"] == extracted_body["id"]
+    assert content_body["extracted_text"] == extracted_text
+    assert content_body["extraction_status"] == "completed"
+
+    db_session.expire_all()
+
+    persisted_content = db_session.scalar(
+        select(ResumeContent).where(
+            ResumeContent.resume_id == resume_id
+        )
+    )
+
+    assert persisted_content is not None
+    assert persisted_content.extracted_text == extracted_text
+    assert persisted_content.extraction_status == "completed"

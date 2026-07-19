@@ -19,6 +19,11 @@ from app.schemas.resume import (
     ResumeResponse,
     ResumeUpdate,
 )
+from app.schemas.resume_content import ResumeContentResponse
+from app.services.resume_content_service import (
+    extract_resume_content as extract_resume_content_service,
+    get_resume_content as get_resume_content_service,
+)
 from app.services.resume_service import (
     create_resume as create_resume_service,
     delete_resume as delete_resume_service,
@@ -117,6 +122,38 @@ def download_resume(
         path=download.file_path,
         media_type=download.content_type,
         filename=download.filename,
+    )
+
+
+@router.post(
+    "/{resume_id}/extract",
+    response_model=ResumeContentResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Extract text from a Resume",
+)
+def extract_resume_content(
+    resume_id: UUID,
+    session: Session = Depends(get_db),
+) -> ResumeContentResponse:
+    return extract_resume_content_service(
+        session,
+        resume_id=resume_id,
+    )
+
+
+@router.get(
+    "/{resume_id}/content",
+    response_model=ResumeContentResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get extracted Resume content",
+)
+def get_resume_content(
+    resume_id: UUID,
+    session: Session = Depends(get_db),
+) -> ResumeContentResponse:
+    return get_resume_content_service(
+        session,
+        resume_id=resume_id,
     )
 
 
