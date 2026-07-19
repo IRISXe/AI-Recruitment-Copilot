@@ -338,8 +338,11 @@ def test_get_application_by_id_rolls_back_database_error() -> None:
     )
 
 
+
 def test_list_applications_returns_repository_results() -> None:
     session = MagicMock(spec=Session)
+    job_id = uuid4()
+    candidate_id = uuid4()
 
     applications = [
         MagicMock(spec=Application),
@@ -354,18 +357,23 @@ def test_list_applications_returns_repository_results() -> None:
             session=session,
             offset=10,
             limit=20,
+            job_id=job_id,
+            candidate_id=candidate_id,
+            application_status="screening",
         )
 
     list_records.assert_called_once_with(
         session,
         offset=10,
         limit=20,
+        job_id=job_id,
+        candidate_id=candidate_id,
+        application_status="screening",
     )
 
     session.rollback.assert_not_called()
 
     assert result is applications
-
 
 def test_list_applications_rolls_back_database_error() -> None:
     session = MagicMock(spec=Session)
@@ -395,6 +403,7 @@ def test_update_application_commits_refreshes_and_returns_application(
 ) -> None:
     session = MagicMock(spec=Session)
     application = MagicMock(spec=Application)
+    application.status = "applied"
     updated_application = MagicMock(spec=Application)
     application_id = uuid4()
 
@@ -476,6 +485,7 @@ def test_update_application_raises_not_found() -> None:
 def test_update_application_rolls_back_database_error() -> None:
     session = MagicMock(spec=Session)
     application = MagicMock(spec=Application)
+    application.status = "applied"
     application_id = uuid4()
     payload = ApplicationUpdate(status="screening")
 
@@ -601,4 +611,86 @@ def test_delete_application_rolls_back_database_error() -> None:
         expected_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         expected_code="application_deletion_failed",
         expected_message="The application could not be deleted.",
+    )
+
+
+def test_update_application_rejects_invalid_status_transition() -> None:
+    session = MagicMock(spec=Session)
+    application_id = uuid4()
+    application = MagicMock(spec=Application)
+    application.status = "applied"
+
+    payload = ApplicationUpdate(status="hired")
+
+    with patch(
+        "app.services.application_service.get_application_by_id_record",
+        return_value=application,
+    ):
+        with patch(
+            "app.services.application_service.update_application_record",
+        ) as update_record:
+            with pytest.raises(AppException) as exc_info:
+                update_application(
+                    session=session,
+                    application_id=application_id,
+                    payload=payload,
+                )
+
+    update_record.assert_not_called()
+    session.commit.assert_not_called()
+    session.refresh.assert_not_called()
+    session.rollback.assert_not_called()
+
+    assert_app_exception(
+        exc_info.value,
+        expected_status=status.HTTP_409_CONFLICT,
+        expected_code="invalid_application_status_transition",
+        expected_message=(
+            "Application status cannot transition "
+            "from 'applied' to 'hired'."
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "terminal_status",
+    [
+        "hired",
+        "rejected",
+        "withdrawn",
+    ],
+)
+def test_update_application_rejects_transition_from_terminal_status(
+    terminal_status: str,
+) -> None:
+    session = MagicMock(spec=Session)
+    application_id = uuid4()
+    application = MagicMock(spec=Application)
+    application.status = terminal_status
+
+    payload = ApplicationUpdate(status="screening")
+
+    with patch(
+        "app.services.application_service.get_application_by_id_record",
+        return_value=application,
+    ):
+        with patch(
+            "app.services.application_service.update_application_record",
+        ) as update_record:
+            with pytest.raises(AppException) as exc_info:
+                update_application(
+                    session=session,
+                    application_id=application_id,
+                    payload=payload,
+                )
+
+    update_record.assert_not_called()
+    session.commit.assert_not_called()
+    session.refresh.assert_not_called()
+    session.rollback.assert_not_called()
+
+    assert exc_info.value.status_code == status.HTTP_409_CONFLICT
+    assert (
+        exc_info.value.code
+        == "invalid_application_status_transition"
     )

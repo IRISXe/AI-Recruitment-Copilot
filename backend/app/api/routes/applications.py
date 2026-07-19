@@ -7,6 +7,7 @@ from app.db.session import get_db
 from app.schemas.application import (
     ApplicationCreate,
     ApplicationResponse,
+    ApplicationStatus,
     ApplicationUpdate,
 )
 from app.services.application_service import (
@@ -58,12 +59,25 @@ def list_applications(
         ge=1,
         le=100,
     ),
+    job_id: UUID | None = Query(
+        default=None,
+    ),
+    candidate_id: UUID | None = Query(
+        default=None,
+    ),
+    application_status: ApplicationStatus | None = Query(
+        default=None,
+        alias="status",
+    ),
     session: Session = Depends(get_db),
 ) -> list[ApplicationResponse]:
     applications = list_applications_service(
         session,
         offset=offset,
         limit=limit,
+        job_id=job_id,
+        candidate_id=candidate_id,
+        application_status=application_status,
     )
 
     return [

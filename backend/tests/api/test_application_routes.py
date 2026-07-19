@@ -636,3 +636,166 @@ def test_delete_application_rejects_malformed_uuid(
         "path",
         "application_id",
     ]
+
+
+def test_list_applications_filters_by_job_candidate_and_status(
+    client: TestClient,
+) -> None:
+    first_job = create_job_through_api(
+        client,
+        title="Backend Filter Engineer",
+    )
+    second_job = create_job_through_api(
+        client,
+        title="Frontend Filter Engineer",
+    )
+
+    first_candidate = create_candidate_through_api(
+        client,
+        full_name="First Filter Candidate",
+        email="first-filter-api@example.com",
+    )
+    second_candidate = create_candidate_through_api(
+        client,
+        full_name="Second Filter Candidate",
+        email="second-filter-api@example.com",
+    )
+
+    matching = client.post(
+        APPLICATIONS_URL,
+        json={
+            "job_id": first_job["id"],
+            "candidate_id": first_candidate["id"],
+            "status": "screening",
+        },
+    )
+    wrong_candidate = client.post(
+        APPLICATIONS_URL,
+        json={
+            "job_id": first_job["id"],
+            "candidate_id": second_candidate["id"],
+            "status": "screening",
+        },
+    )
+    wrong_job = client.post(
+        APPLICATIONS_URL,
+        json={
+            "job_id": second_job["id"],
+            "candidate_id": first_candidate["id"],
+            "status": "screening",
+        },
+    )
+    wrong_status = client.post(
+        APPLICATIONS_URL,
+        json={
+            "job_id": second_job["id"],
+            "candidate_id": second_candidate["id"],
+            "status": "applied",
+        },
+    )
+
+    assert matching.status_code == 201
+    assert wrong_candidate.status_code == 201
+    assert wrong_job.status_code == 201
+    assert wrong_status.status_code == 201
+
+    response = client.get(
+        APPLICATIONS_URL,
+        params={
+            "job_id": first_job["id"],
+            "candidate_id": first_candidate["id"],
+            "status": "screening",
+        },
+    )
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()] == [
+        matching.json()["id"],
+    ]
+
+
+@pytest.mark.parametrize(
+    (
+        "parameter_name",
+        "invalid_value",
+    ),
+    [
+        (
+            "job_id",
+            "not-a-valid-uuid",
+        ),
+        (
+            "candidate_id",
+            "not-a-valid-uuid",
+        ),
+        (
+            "status",
+            "invalid",
+        ),
+    ],
+)
+def test_list_applications_rejects_invalid_filters(
+    client: TestClient,
+    parameter_name: str,
+    invalid_value: str,
+) -> None:
+    response = client.get(
+        APPLICATIONS_URL,
+        params={
+            parameter_name: invalid_value,
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "validation_error"
+    assert response.json()["error"]["details"][0]["loc"][0] == "query"
+
+
+def test_update_application_rejects_invalid_status_transition(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    job = create_job_through_api(
+        client,
+        title="Transition Backend Engineer",
+    )
+    candidate = create_candidate_through_api(
+        client,
+        full_name="Transition Candidate",
+        email="transition-candidate@example.com",
+    )
+
+    created_application = create_application_through_api(
+        client,
+        job_id=str(job["id"]),
+        candidate_id=str(candidate["id"]),
+    )
+
+    application_id = UUID(str(created_application["id"]))
+
+    response = client.patch(
+        f"{APPLICATIONS_URL}/{application_id}",
+        json={
+            "status": "hired",
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"] == {
+        "code": "invalid_application_status_transition",
+        "message": (
+            "Application status cannot transition "
+            "from 'applied' to 'hired'."
+        ),
+        "details": None,
+    }
+
+    db_session.expire_all()
+
+    persisted_application = db_session.get(
+        Application,
+        application_id,
+    )
+
+    assert persisted_application is not None
+    assert persisted_application.status == "applied"

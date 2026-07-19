@@ -21,10 +21,66 @@ from app.repositories.candidate_repository import (
 from app.repositories.job_repository import (
     get_job_by_id as get_job_by_id_record,
 )
-from app.schemas.application import ApplicationCreate, ApplicationUpdate
+from app.schemas.application import (
+    ApplicationCreate,
+    ApplicationStatus,
+    ApplicationUpdate,
+)
 
 
 logger = logging.getLogger(__name__)
+
+
+ALLOWED_STATUS_TRANSITIONS: dict[
+    ApplicationStatus,
+    frozenset[ApplicationStatus],
+] = {
+    "applied": frozenset(
+        {
+            "screening",
+            "rejected",
+            "withdrawn",
+        }
+    ),
+    "screening": frozenset(
+        {
+            "shortlisted",
+            "rejected",
+            "withdrawn",
+        }
+    ),
+    "shortlisted": frozenset(
+        {
+            "hired",
+            "rejected",
+            "withdrawn",
+        }
+    ),
+    "rejected": frozenset(),
+    "hired": frozenset(),
+    "withdrawn": frozenset(),
+}
+
+
+def validate_status_transition(
+    *,
+    current_status: ApplicationStatus,
+    requested_status: ApplicationStatus,
+) -> None:
+    if requested_status == current_status:
+        return
+
+    allowed_statuses = ALLOWED_STATUS_TRANSITIONS[current_status]
+
+    if requested_status not in allowed_statuses:
+        raise AppException(
+            status_code=status.HTTP_409_CONFLICT,
+            code="invalid_application_status_transition",
+            message=(
+                "Application status cannot transition "
+                f"from '{current_status}' to '{requested_status}'."
+            ),
+        )
 
 
 def create_application(
@@ -133,12 +189,18 @@ def list_applications(
     *,
     offset: int,
     limit: int,
+    job_id: UUID | None = None,
+    candidate_id: UUID | None = None,
+    application_status: ApplicationStatus | None = None,
 ) -> list[Application]:
     try:
         return list_applications_records(
             session,
             offset=offset,
             limit=limit,
+            job_id=job_id,
+            candidate_id=candidate_id,
+            application_status=application_status,
         )
 
     except SQLAlchemyError as exc:
@@ -172,6 +234,15 @@ def update_application(
                 status_code=status.HTTP_404_NOT_FOUND,
                 code="application_not_found",
                 message="The requested application does not exist.",
+            )
+
+        if (
+            "status" in payload.model_fields_set
+            and payload.status is not None
+        ):
+            validate_status_transition(
+                current_status=application.status,
+                requested_status=payload.status,
             )
 
         updated_application = update_application_record(

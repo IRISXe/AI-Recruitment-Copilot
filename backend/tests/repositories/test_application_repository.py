@@ -351,3 +351,77 @@ def test_delete_application_removes_application_from_database_session(
 
     assert delete_result is None
     assert deleted_application is None
+
+
+def test_list_applications_filters_by_job_candidate_and_status(
+    db_session: Session,
+) -> None:
+    first_job = create_job(
+        session=db_session,
+        payload=build_job_payload(),
+    )
+    second_job = create_job(
+        session=db_session,
+        payload=build_job_payload(),
+    )
+
+    first_candidate = create_candidate(
+        session=db_session,
+        payload=build_candidate_payload(
+            full_name="First Filter Candidate",
+            email="first-filter-repository@example.com",
+        ),
+    )
+    second_candidate = create_candidate(
+        session=db_session,
+        payload=build_candidate_payload(
+            full_name="Second Filter Candidate",
+            email="second-filter-repository@example.com",
+        ),
+    )
+
+    matching_application = create_application(
+        session=db_session,
+        payload=ApplicationCreate(
+            job_id=first_job.id,
+            candidate_id=first_candidate.id,
+            status="screening",
+        ),
+    )
+    create_application(
+        session=db_session,
+        payload=ApplicationCreate(
+            job_id=first_job.id,
+            candidate_id=second_candidate.id,
+            status="screening",
+        ),
+    )
+    create_application(
+        session=db_session,
+        payload=ApplicationCreate(
+            job_id=second_job.id,
+            candidate_id=first_candidate.id,
+            status="screening",
+        ),
+    )
+    create_application(
+        session=db_session,
+        payload=ApplicationCreate(
+            job_id=second_job.id,
+            candidate_id=second_candidate.id,
+            status="applied",
+        ),
+    )
+
+    results = list_applications(
+        session=db_session,
+        offset=0,
+        limit=20,
+        job_id=first_job.id,
+        candidate_id=first_candidate.id,
+        application_status="screening",
+    )
+
+    assert [application.id for application in results] == [
+        matching_application.id,
+    ]
