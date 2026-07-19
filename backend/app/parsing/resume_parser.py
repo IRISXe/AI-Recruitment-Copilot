@@ -18,6 +18,22 @@ PHONE_PATTERN = re.compile(
     r"(?<!\d)(?:\+?\d[\d\s().-]{7,}\d)(?!\d)"
 )
 
+CURRENT_ROLE_PATTERN = re.compile(
+    (
+        r"^(?:current\s+role|role|title|designation)"
+        r"\s*[:\-]\s*(?P<value>.+)$"
+    ),
+    flags=re.IGNORECASE,
+)
+
+LOCATION_PATTERN = re.compile(
+    (
+        r"^(?:current\s+location|location|based\s+in)"
+        r"\s*[:\-]\s*(?P<value>.+)$"
+    ),
+    flags=re.IGNORECASE,
+)
+
 SECTION_HEADINGS = {
     "summary",
     "professional summary",
@@ -33,6 +49,23 @@ SECTION_HEADINGS = {
     "certifications",
     "languages",
 }
+
+SECTION_ALIASES = {
+    "summary": "summary",
+    "professional summary": "summary",
+    "profile": "summary",
+    "objective": "summary",
+    "experience": "experience",
+    "work experience": "experience",
+    "professional experience": "experience",
+    "education": "education",
+    "skills": "skills",
+    "technical skills": "skills",
+    "projects": "projects",
+    "certifications": "certifications",
+    "languages": "languages",
+}
+
 
 SKILL_ALIASES = {
     "amazon web services": "AWS",
@@ -157,6 +190,93 @@ def extract_skills(
     )
 
 
+def normalize_section_heading(
+    line: str,
+) -> str | None:
+    normalized_line = line.strip().lower().rstrip(":")
+
+    return SECTION_ALIASES.get(normalized_line)
+
+
+def split_resume_sections(
+    lines: list[str],
+) -> dict[str, list[str]]:
+    sections: dict[str, list[str]] = {
+        "header": [],
+    }
+
+    current_section = "header"
+
+    for line in lines:
+        section_name = normalize_section_heading(line)
+
+        if section_name is not None:
+            current_section = section_name
+            sections.setdefault(
+                current_section,
+                [],
+            )
+            continue
+
+        sections.setdefault(
+            current_section,
+            [],
+        ).append(line)
+
+    return sections
+
+
+def extract_professional_summary(
+    sections: dict[str, list[str]],
+) -> str | None:
+    summary_lines = sections.get(
+        "summary",
+        [],
+    )
+
+    if not summary_lines:
+        return None
+
+    summary = " ".join(summary_lines).strip()
+
+    return summary or None
+
+def extract_labeled_value(
+    lines: list[str],
+    pattern: re.Pattern[str],
+) -> str | None:
+    for line in lines:
+        match = pattern.match(line)
+
+        if match is None:
+            continue
+
+        value = match.group("value").strip()
+
+        if value:
+            return value
+
+    return None
+
+
+def extract_current_role(
+    lines: list[str],
+) -> str | None:
+    return extract_labeled_value(
+        lines,
+        CURRENT_ROLE_PATTERN,
+    )
+
+
+def extract_location(
+    lines: list[str],
+) -> str | None:
+    return extract_labeled_value(
+        lines,
+        LOCATION_PATTERN,
+    )
+
+
 def parse_resume_text(
     text: str,
 ) -> ResumeProfileData:
@@ -168,19 +288,22 @@ def parse_resume_text(
         )
 
     lines = normalize_lines(normalized_text)
+    sections = split_resume_sections(lines)
 
     return ResumeProfileData(
-        full_name=extract_full_name(lines),
-        email=extract_email(normalized_text),
-        phone=extract_phone(normalized_text),
-        location=None,
-        current_role=None,
-        professional_summary=None,
-        total_experience_months=None,
-        skills=extract_skills(normalized_text),
-        education=[],
-        work_experience=[],
-        projects=[],
-        certifications=[],
-        languages=[],
-    )
+    full_name=extract_full_name(lines),
+    email=extract_email(normalized_text),
+    phone=extract_phone(normalized_text),
+    location=extract_location(lines),
+    current_role=extract_current_role(lines),
+    professional_summary=extract_professional_summary(
+        sections
+    ),
+    total_experience_months=None,
+    skills=extract_skills(normalized_text),
+    education=[],
+    work_experience=[],
+    projects=[],
+    certifications=[],
+    languages=[],
+)
