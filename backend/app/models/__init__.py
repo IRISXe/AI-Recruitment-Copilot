@@ -3,6 +3,7 @@ from app.models.candidate import Candidate
 from app.models.job import Job
 from app.models.resume import Resume
 from app.models.resume_content import ResumeContent
+from app.models.resume_profile import ResumeProfile
 
 
 __all__ = [
@@ -11,4 +12,5 @@ __all__ = [
     "Job",
     "Resume",
     "ResumeContent",
+    "ResumeProfile",
 ]

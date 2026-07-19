@@ -20,9 +20,14 @@ from app.schemas.resume import (
     ResumeUpdate,
 )
 from app.schemas.resume_content import ResumeContentResponse
+from app.schemas.resume_profile import ResumeProfileResponse
 from app.services.resume_content_service import (
     extract_resume_content as extract_resume_content_service,
     get_resume_content as get_resume_content_service,
+)
+from app.services.resume_profile_service import (
+    get_resume_profile as get_resume_profile_service,
+    parse_resume_profile as parse_resume_profile_service,
 )
 from app.services.resume_service import (
     create_resume as create_resume_service,
@@ -152,6 +157,38 @@ def get_resume_content(
     session: Session = Depends(get_db),
 ) -> ResumeContentResponse:
     return get_resume_content_service(
+        session,
+        resume_id=resume_id,
+    )
+
+
+@router.post(
+    "/{resume_id}/parse",
+    response_model=ResumeProfileResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Parse a Resume into a structured profile",
+)
+def parse_resume_profile(
+    resume_id: UUID,
+    session: Session = Depends(get_db),
+) -> ResumeProfileResponse:
+    return parse_resume_profile_service(
+        session,
+        resume_id=resume_id,
+    )
+
+
+@router.get(
+    "/{resume_id}/profile",
+    response_model=ResumeProfileResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get a structured Resume profile",
+)
+def get_resume_profile(
+    resume_id: UUID,
+    session: Session = Depends(get_db),
+) -> ResumeProfileResponse:
+    return get_resume_profile_service(
         session,
         resume_id=resume_id,
     )
