@@ -16,26 +16,41 @@ from app.parsing.resume_parser import (
 from app.repositories.resume_content_repository import (
     get_resume_content_by_resume_id as get_resume_content_record,
 )
-from app.repositories.resume_profile_repository import (
+from app.repositories.resume_profile_state_repository import (
     create_resume_profile as create_resume_profile_record,
 )
-from app.repositories.resume_profile_repository import (
+from app.repositories.resume_profile_state_repository import (
     get_resume_profile_by_resume_id as get_resume_profile_record,
 )
-from app.repositories.resume_profile_repository import (
-    update_resume_profile as update_resume_profile_record,
+from app.repositories.resume_profile_state_repository import (
+    update_resume_profile_state as update_resume_profile_record,
 )
 from app.repositories.resume_repository import (
     get_resume_by_id as get_resume_by_id_record,
 )
 
 
-def calculate_source_text_sha256(
-    text: str,
-) -> str:
-    return sha256(
-        text.encode("utf-8")
-    ).hexdigest()
+def calculate_source_text_sha256(text: str) -> str:
+    return sha256(text.encode("utf-8")).hexdigest()
+
+
+def _get_existing_resume(
+    session: Session,
+    resume_id: UUID,
+) -> object:
+    resume = get_resume_by_id_record(
+        session,
+        resume_id,
+    )
+
+    if resume is None:
+        raise AppException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            code="resume_not_found",
+            message="The requested resume does not exist.",
+        )
+
+    return resume
 
 
 def get_resume_profile(
@@ -43,37 +58,15 @@ def get_resume_profile(
     resume_id: UUID,
 ) -> ResumeProfile:
     try:
-        resume = get_resume_by_id_record(
+        _get_existing_resume(
             session,
             resume_id,
         )
-
-        if resume is None:
-            raise AppException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                code="resume_not_found",
-                message="The requested resume does not exist.",
-            )
 
         resume_profile = get_resume_profile_record(
             session,
             resume_id=resume_id,
         )
-
-        if resume_profile is None:
-            raise AppException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                code="resume_profile_not_found",
-                message=(
-                    "A structured profile is not available "
-                    "for this resume."
-                ),
-            )
-
-        return resume_profile
-
-    except AppException:
-        raise
 
     except SQLAlchemyError as exc:
         session.rollback()
@@ -87,23 +80,30 @@ def get_resume_profile(
             ),
         ) from exc
 
+    if resume_profile is None:
+        raise AppException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            code="resume_profile_not_found",
+            message=(
+                "A structured profile is not available "
+                "for this resume."
+            ),
+        )
+
+    return resume_profile
+
 
 def parse_resume_profile(
     session: Session,
+    *,
     resume_id: UUID,
+    force: bool = False,
 ) -> ResumeProfile:
     try:
-        resume = get_resume_by_id_record(
+        _get_existing_resume(
             session,
             resume_id,
         )
-
-        if resume is None:
-            raise AppException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                code="resume_not_found",
-                message="The requested resume does not exist.",
-            )
 
         resume_content = get_resume_content_record(
             session,
@@ -136,9 +136,7 @@ def parse_resume_profile(
             raise AppException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 code="resume_content_empty",
-                message=(
-                    "The extracted Resume content is empty."
-                ),
+                message="The extracted Resume content is empty.",
             )
 
         source_text_sha256 = calculate_source_text_sha256(
@@ -150,12 +148,20 @@ def parse_resume_profile(
             resume_id=resume_id,
         )
 
+        if (
+            resume_profile is not None
+            and resume_profile.parsing_status == "completed"
+            and resume_profile.source_text_sha256 == source_text_sha256
+            and resume_profile.parser_version == PARSER_VERSION
+            and not force
+        ):
+            return resume_profile
+
         if resume_profile is None:
             resume_profile = create_resume_profile_record(
                 session,
                 resume_id=resume_id,
             )
-
         else:
             resume_profile = update_resume_profile_record(
                 session,
@@ -169,7 +175,7 @@ def parse_resume_profile(
             )
 
         try:
-            profile_data = parse_resume_text(
+            parsed_profile = parse_resume_text(
                 extracted_text
             )
 
@@ -200,8 +206,8 @@ def parse_resume_profile(
         completed_profile = update_resume_profile_record(
             session,
             resume_profile=resume_profile,
-            profile_data=profile_data.model_dump(
-                mode="json",
+            profile_data=parsed_profile.model_dump(
+                mode="json"
             ),
             parsing_status="completed",
             parsing_error=None,

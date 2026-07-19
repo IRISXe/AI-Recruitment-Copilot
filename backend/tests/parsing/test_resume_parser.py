@@ -8,14 +8,18 @@ from app.parsing.resume_parser import (
     PARSER_VERSION,
     ResumeParsingError,
     calculate_total_experience_months,
+    extract_certifications,
+    extract_education,
     extract_current_role,
     extract_email,
     extract_experience_highlight,
     extract_full_name,
     extract_labeled_value,
+    extract_languages,
     extract_location,
     extract_phone,
     extract_professional_summary,
+    extract_projects,
     extract_skills,
     extract_work_experience,
     is_current_end_date,
@@ -730,3 +734,333 @@ def test_parse_resume_text_calculates_overlap_safe_experience(
 
     assert len(profile.work_experience) == 2
     assert profile.total_experience_months == 18
+
+
+# Phase 7H-7N parser coverage
+
+def test_extract_education_parses_multiple_entries_and_optional_fields() -> None:
+    result = extract_education(
+        {
+            "education": [
+                "Institution: JNTU Hyderabad",
+                "Degree: Bachelor of Technology",
+                "Field of Study: Computer Science",
+                "Location: Hyderabad",
+                "Dates: 2020 - 2024",
+                "Grade: 8.2 CGPA",
+                "Institution: State Board of Technical Education",
+                "Degree: Diploma",
+            ]
+        }
+    )
+
+    assert len(result) == 2
+    assert result[0].institution == "JNTU Hyderabad"
+    assert result[0].degree == "Bachelor of Technology"
+    assert result[0].field_of_study == "Computer Science"
+    assert result[0].start_date == "2020"
+    assert result[0].end_date == "2024"
+    assert result[0].description == "Location: Hyderabad\nGrade: 8.2 CGPA"
+    assert result[1].institution == "State Board of Technical Education"
+    assert result[1].degree == "Diploma"
+    assert result[1].start_date is None
+
+
+def test_extract_education_returns_empty_list_when_section_missing() -> None:
+    assert extract_education({}) == []
+
+
+def test_extract_projects_parses_technologies_url_and_highlights() -> None:
+    result = extract_projects(
+        {
+            "projects": [
+                "Project: AI Recruitment Copilot",
+                "Description: Recruitment management platform",
+                "Technologies: React, FastAPI, postgres, Docker",
+                "URL: https://example.com/copilot",
+                "- Built resume upload and extraction",
+                "- Added structured profile parsing",
+            ]
+        }
+    )
+
+    assert len(result) == 1
+    project = result[0]
+    assert project.name == "AI Recruitment Copilot"
+    assert project.description == "Recruitment management platform"
+    assert project.technologies == [
+        "React.js",
+        "FastAPI",
+        "PostgreSQL",
+        "Docker",
+    ]
+    assert project.url == "https://example.com/copilot"
+    assert project.highlights == [
+        "Built resume upload and extraction",
+        "Added structured profile parsing",
+    ]
+
+
+def test_extract_projects_supports_multiple_projects() -> None:
+    result = extract_projects(
+        {
+            "projects": [
+                "Project: Recruitment Copilot",
+                "Description: Backend platform",
+                "Project: App Graph Builder",
+                "Technologies: React, TypeScript",
+            ]
+        }
+    )
+
+    assert [entry.name for entry in result] == [
+        "Recruitment Copilot",
+        "App Graph Builder",
+    ]
+
+
+def test_extract_certifications_supports_multiple_entries() -> None:
+    result = extract_certifications(
+        {
+            "certifications": [
+                "Certification: AWS Cloud Practitioner",
+                "Issuer: Amazon Web Services",
+                "Issue Date: January 2025",
+                "Expiry Date: January 2028",
+                "Credential ID: AWS-123",
+                "Credential URL: https://example.com/aws-123",
+                "Certification: SQL Fundamentals",
+                "Issuer: Data Academy",
+            ]
+        }
+    )
+
+    assert len(result) == 2
+    assert result[0].name == "AWS Cloud Practitioner"
+    assert result[0].issuer == "Amazon Web Services"
+    assert result[0].issue_date == "January 2025"
+    assert result[0].expiry_date == "January 2028"
+    assert result[0].credential_id == "AWS-123"
+    assert result[0].credential_url == "https://example.com/aws-123"
+    assert result[1].name == "SQL Fundamentals"
+    assert result[1].expiry_date is None
+
+
+def test_extract_languages_supports_lines_commas_and_proficiency() -> None:
+    result = extract_languages(
+        {
+            "languages": [
+                "English",
+                "Hindi, Telugu",
+                "English - Professional",
+                "Hindi - Native",
+            ]
+        }
+    )
+
+    assert result == [
+        "English - Professional",
+        "Hindi - Native",
+        "Telugu",
+    ]
+
+
+def test_extract_work_experience_supports_positional_format() -> None:
+    result = extract_work_experience(
+        {
+            "experience": [
+                "Acme Technologies",
+                "Backend Developer",
+                "January 2024 – Present",
+                "Hyderabad",
+                "- Built REST APIs",
+            ]
+        }
+    )
+
+    assert len(result) == 1
+    entry = result[0]
+    assert entry.company == "Acme Technologies"
+    assert entry.role == "Backend Developer"
+    assert entry.start_date == "January 2024"
+    assert entry.end_date == "Present"
+    assert entry.is_current is True
+    assert entry.location == "Hyderabad"
+    assert entry.highlights == ["Built REST APIs"]
+
+
+def test_extract_work_experience_supports_pipe_format() -> None:
+    result = extract_work_experience(
+        {
+            "experience": [
+                "Backend Developer | Acme Technologies",
+                "January 2024 – Present | Hyderabad",
+                "- Built REST APIs",
+            ]
+        }
+    )
+
+    assert len(result) == 1
+    assert result[0].role == "Backend Developer"
+    assert result[0].company == "Acme Technologies"
+    assert result[0].location == "Hyderabad"
+    assert result[0].is_current is True
+
+
+def test_extract_work_experience_supports_company_dash_role() -> None:
+    result = extract_work_experience(
+        {
+            "experience": [
+                "Acme Technologies — Backend Developer",
+                "Jan 2024 to Present",
+            ]
+        }
+    )
+
+    assert len(result) == 1
+    assert result[0].company == "Acme Technologies"
+    assert result[0].role == "Backend Developer"
+    assert result[0].start_date == "Jan 2024"
+    assert result[0].end_date == "Present"
+
+
+def test_parse_resume_text_derives_current_role_and_location() -> None:
+    profile = parse_resume_text(
+        """
+        Harsha Vardhan
+        harsha@example.com
+        +91 98765 43210
+
+        Work Experience
+        Acme Technologies
+        Backend Developer
+        January 2024 – Present
+        Hyderabad
+
+        Skills
+        Python, FastAPI
+        """
+    )
+
+    assert profile.current_role == "Backend Developer"
+    assert profile.location == "Hyderabad"
+
+
+def test_explicit_header_role_and_location_take_priority() -> None:
+    profile = parse_resume_text(
+        """
+        Harsha Vardhan
+        Current Role: Technical Consultant
+        Location: Bengaluru
+        harsha@example.com
+        +91 98765 43210
+
+        Work Experience
+        Acme Technologies
+        Backend Developer
+        January 2024 – Present
+        Hyderabad
+        """
+    )
+
+    assert profile.current_role == "Technical Consultant"
+    assert profile.location == "Bengaluru"
+
+
+def test_parse_resume_text_adds_warnings_missing_sections_and_confidence() -> None:
+    profile = parse_resume_text(
+        """
+        Harsha Vardhan
+
+        Education
+        Unrecognised education text
+        """
+    )
+
+    assert "No email detected" in profile.warnings
+    assert "No phone detected" in profile.warnings
+    assert (
+        "Education section found but no valid entries parsed"
+        in profile.warnings
+    )
+    assert "experience" in profile.missing_sections
+    assert 0.0 <= profile.confidence <= 1.0
+
+
+def test_parse_resume_text_integrates_all_structured_sections() -> None:
+    profile = parse_resume_text(
+        """
+        Harsha Vardhan
+        harsha@example.com
+        +91 98765 43210
+
+        Professional Summary
+        Backend developer building reliable APIs.
+
+        Work Experience
+        Company: Acme Technologies
+        Role: Backend Developer
+        Location: Hyderabad
+        Dates: January 2024 - Present
+        - Built FastAPI services
+
+        Education
+        Institution: JNTU Hyderabad
+        Degree: Bachelor of Technology
+        Field of Study: Computer Science
+        Dates: 2020 - 2024
+
+        Projects
+        Project: AI Recruitment Copilot
+        Description: Recruitment management platform
+        Technologies: React, FastAPI, PostgreSQL, Docker
+        - Added structured parsing
+
+        Certifications
+        Certification: AWS Cloud Practitioner
+        Issuer: Amazon Web Services
+
+        Languages
+        English - Professional, Telugu - Native
+
+        Technical Skills
+        Python, FastAPI, PostgreSQL, React, Docker
+        """
+    )
+
+    assert len(profile.work_experience) == 1
+    assert len(profile.education) == 1
+    assert len(profile.projects) == 1
+    assert len(profile.certifications) == 1
+    assert profile.languages == [
+        "English - Professional",
+        "Telugu - Native",
+    ]
+    assert profile.current_role == "Backend Developer"
+    assert profile.location == "Hyderabad"
+    assert profile.total_experience_months is not None
+    assert profile.warnings == []
+    assert profile.missing_sections == []
+    assert profile.confidence == 1.0
+
+
+def test_total_experience_remains_overlap_safe() -> None:
+    entries = [
+        ResumeExperienceEntry(
+            company="A",
+            role="Developer",
+            start_date="January 2022",
+            end_date="December 2022",
+        ),
+        ResumeExperienceEntry(
+            company="B",
+            role="Developer",
+            start_date="July 2022",
+            end_date="June 2023",
+        ),
+    ]
+
+    assert calculate_total_experience_months(
+        entries,
+        reference_date=date(2026, 7, 19),
+    ) == 18

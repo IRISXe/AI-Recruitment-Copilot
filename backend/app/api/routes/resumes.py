@@ -14,13 +14,20 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
+from app.schemas.candidate import CandidateResponse
 from app.schemas.resume import (
     ResumeCreate,
     ResumeResponse,
     ResumeUpdate,
 )
 from app.schemas.resume_content import ResumeContentResponse
-from app.schemas.resume_profile import ResumeProfileResponse
+from app.schemas.resume_profile import (
+    ResumeCandidateMergeRequest,
+    ResumeProfileResponse,
+)
+from app.services.resume_candidate_merge_service import (
+    merge_resume_profile_into_candidate,
+)
 from app.services.resume_content_service import (
     extract_resume_content as extract_resume_content_service,
     get_resume_content as get_resume_content_service,
@@ -166,15 +173,17 @@ def get_resume_content(
     "/{resume_id}/parse",
     response_model=ResumeProfileResponse,
     status_code=status.HTTP_200_OK,
-    summary="Parse a Resume into a structured profile",
+    summary="Parse a structured Resume profile",
 )
 def parse_resume_profile(
     resume_id: UUID,
+    force: bool = Query(default=False),
     session: Session = Depends(get_db),
 ) -> ResumeProfileResponse:
     return parse_resume_profile_service(
         session,
         resume_id=resume_id,
+        force=force,
     )
 
 
@@ -190,7 +199,25 @@ def get_resume_profile(
 ) -> ResumeProfileResponse:
     return get_resume_profile_service(
         session,
+        resume_id,
+    )
+
+
+@router.post(
+    "/{resume_id}/merge-candidate",
+    response_model=CandidateResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Merge selected Resume profile fields into a Candidate",
+)
+def merge_resume_profile_candidate(
+    resume_id: UUID,
+    payload: ResumeCandidateMergeRequest,
+    session: Session = Depends(get_db),
+) -> CandidateResponse:
+    return merge_resume_profile_into_candidate(
+        session,
         resume_id=resume_id,
+        payload=payload,
     )
 
 
