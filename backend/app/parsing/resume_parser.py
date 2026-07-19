@@ -1,21 +1,31 @@
 import re
 
-from app.schemas.resume_profile import ResumeProfileData
+from app.schemas.resume_profile import (
+    ResumeExperienceEntry,
+    ResumeProfileData,
+)
 
 
 PARSER_VERSION = "rule-based-v1"
 
 
-class ResumeParsingError(Exception):
-    """Raised when structured data cannot be parsed from resume text."""
+class ResumeParsingError(ValueError):
+    """Raised when extracted Resume text cannot be parsed."""
 
 
 EMAIL_PATTERN = re.compile(
-    r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"
+    r"\b[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}\b",
+    flags=re.IGNORECASE,
 )
 
 PHONE_PATTERN = re.compile(
-    r"(?<!\d)(?:\+?\d[\d\s().-]{7,}\d)(?!\d)"
+    (
+        r"(?<!\d)"
+        r"(?:\+\d{1,3}[\s.\-]?)?"
+        r"(?:\(?\d{2,5}\)?[\s.\-]?){2,5}"
+        r"\d{2,5}"
+        r"(?!\d)"
+    )
 )
 
 CURRENT_ROLE_PATTERN = re.compile(
@@ -34,6 +44,65 @@ LOCATION_PATTERN = re.compile(
     flags=re.IGNORECASE,
 )
 
+EXPERIENCE_COMPANY_PATTERN = re.compile(
+    r"^company\s*[:\-]\s*(?P<value>.+)$",
+    flags=re.IGNORECASE,
+)
+
+EXPERIENCE_ROLE_PATTERN = re.compile(
+    (
+        r"^(?:role|title|designation)"
+        r"\s*[:\-]\s*(?P<value>.+)$"
+    ),
+    flags=re.IGNORECASE,
+)
+
+EXPERIENCE_START_DATE_PATTERN = re.compile(
+    (
+        r"^start\s+date"
+        r"\s*[:\-]\s*(?P<value>.+)$"
+    ),
+    flags=re.IGNORECASE,
+)
+
+EXPERIENCE_END_DATE_PATTERN = re.compile(
+    (
+        r"^end\s+date"
+        r"\s*[:\-]\s*(?P<value>.+)$"
+    ),
+    flags=re.IGNORECASE,
+)
+
+EXPERIENCE_DATE_VALUE_PATTERN = (
+    r"(?:(?:[A-Za-z]{3,9})\s+)?\d{4}"
+)
+
+EXPERIENCE_DATE_RANGE_PATTERN = re.compile(
+    (
+        r"^(?:(?:dates?|duration|period)"
+        r"\s*[:\-]\s*)?"
+        rf"(?P<start>{EXPERIENCE_DATE_VALUE_PATTERN})"
+        r"\s*(?:-|–|—|\bto\b)\s*"
+        rf"(?P<end>{EXPERIENCE_DATE_VALUE_PATTERN}"
+        r"|present|current|ongoing|now)$"
+    ),
+    flags=re.IGNORECASE,
+)
+
+CURRENT_END_DATE_VALUES = {
+    "present",
+    "current",
+    "ongoing",
+    "now",
+}
+
+EXPERIENCE_HIGHLIGHT_PREFIXES = (
+    "-",
+    "*",
+    "•",
+    "▪",
+)
+
 SECTION_HEADINGS = {
     "summary",
     "professional summary",
@@ -42,6 +111,7 @@ SECTION_HEADINGS = {
     "experience",
     "work experience",
     "professional experience",
+    "employment history",
     "education",
     "skills",
     "technical skills",
@@ -58,6 +128,7 @@ SECTION_ALIASES = {
     "experience": "experience",
     "work experience": "experience",
     "professional experience": "experience",
+    "employment history": "experience",
     "education": "education",
     "skills": "skills",
     "technical skills": "skills",
@@ -66,34 +137,67 @@ SECTION_ALIASES = {
     "languages": "languages",
 }
 
-
-SKILL_ALIASES = {
-    "amazon web services": "AWS",
-    "aws": "AWS",
-    "docker": "Docker",
-    "fastapi": "FastAPI",
-    "git": "Git",
-    "javascript": "JavaScript",
-    "langchain": "LangChain",
-    "next.js": "Next.js",
-    "nextjs": "Next.js",
-    "node.js": "Node.js",
-    "nodejs": "Node.js",
-    "postgresql": "PostgreSQL",
-    "postgres": "PostgreSQL",
-    "python": "Python",
-    "react.js": "React.js",
-    "reactjs": "React.js",
-    "react": "React.js",
-    "sql": "SQL",
-    "sqlalchemy": "SQLAlchemy",
-    "tailwind css": "Tailwind CSS",
-    "tailwind": "Tailwind CSS",
-    "typescript": "TypeScript",
+SKILL_ALIASES: dict[str, tuple[str, ...]] = {
+    "AWS": (
+        "aws",
+        "amazon web services",
+    ),
+    "Docker": (
+        "docker",
+    ),
+    "FastAPI": (
+        "fastapi",
+    ),
+    "Git": (
+        "git",
+    ),
+    "JavaScript": (
+        "javascript",
+        "js",
+    ),
+    "LangChain": (
+        "langchain",
+    ),
+    "Next.js": (
+        "next.js",
+        "nextjs",
+    ),
+    "Node.js": (
+        "node.js",
+        "nodejs",
+    ),
+    "PostgreSQL": (
+        "postgresql",
+        "postgres",
+    ),
+    "Python": (
+        "python",
+    ),
+    "React.js": (
+        "react",
+        "react.js",
+        "reactjs",
+    ),
+    "SQL": (
+        "sql",
+    ),
+    "SQLAlchemy": (
+        "sqlalchemy",
+    ),
+    "Tailwind CSS": (
+        "tailwind",
+        "tailwind css",
+    ),
+    "TypeScript": (
+        "typescript",
+        "ts",
+    ),
 }
 
 
-def normalize_lines(text: str) -> list[str]:
+def normalize_lines(
+    text: str,
+) -> list[str]:
     return [
         line.strip()
         for line in text.splitlines()
@@ -101,7 +205,9 @@ def normalize_lines(text: str) -> list[str]:
     ]
 
 
-def extract_email(text: str) -> str | None:
+def extract_email(
+    text: str,
+) -> str | None:
     match = EMAIL_PATTERN.search(text)
 
     if match is None:
@@ -110,84 +216,40 @@ def extract_email(text: str) -> str | None:
     return match.group(0).lower()
 
 
-def normalize_phone(value: str) -> str:
-    value = value.strip()
+def normalize_phone(
+    phone: str,
+) -> str | None:
+    normalized_phone = phone.strip()
 
-    has_country_prefix = value.startswith("+")
+    has_plus_prefix = normalized_phone.startswith("+")
 
     digits = re.sub(
         r"\D",
         "",
-        value,
+        normalized_phone,
     )
 
-    if has_country_prefix:
+    if not 10 <= len(digits) <= 15:
+        return None
+
+    if has_plus_prefix:
         return f"+{digits}"
 
     return digits
 
 
-def extract_phone(text: str) -> str | None:
-    for match in PHONE_PATTERN.finditer(text):
-        phone = normalize_phone(match.group(0))
-
-        digit_count = len(
-            phone.removeprefix("+")
-        )
-
-        if 10 <= digit_count <= 15:
-            return phone
-
-    return None
-
-
-def extract_full_name(
-    lines: list[str],
-) -> str | None:
-    for line in lines[:5]:
-        normalized_line = line.lower().rstrip(":")
-
-        if normalized_line in SECTION_HEADINGS:
-            continue
-
-        if EMAIL_PATTERN.search(line):
-            continue
-
-        if PHONE_PATTERN.search(line):
-            continue
-
-        if any(character.isdigit() for character in line):
-            continue
-
-        words = line.split()
-
-        if 2 <= len(words) <= 5:
-            return line
-
-    return None
-
-
-def extract_skills(
+def extract_phone(
     text: str,
-) -> list[str]:
-    normalized_text = text.lower()
-
-    detected_skills: list[str] = []
-
-    for alias, canonical_name in SKILL_ALIASES.items():
-        pattern = re.compile(
-            rf"(?<![\w.]){re.escape(alias)}(?![\w.])",
-            flags=re.IGNORECASE,
+) -> str | None:
+    for match in PHONE_PATTERN.finditer(text):
+        normalized_phone = normalize_phone(
+            match.group(0)
         )
 
-        if pattern.search(normalized_text):
-            if canonical_name not in detected_skills:
-                detected_skills.append(canonical_name)
+        if normalized_phone is not None:
+            return normalized_phone
 
-    return sorted(
-        detected_skills,
-        key=str.casefold,
-    )
+    return None
 
 
 def normalize_section_heading(
@@ -212,6 +274,7 @@ def split_resume_sections(
 
         if section_name is not None:
             current_section = section_name
+
             sections.setdefault(
                 current_section,
                 [],
@@ -224,6 +287,81 @@ def split_resume_sections(
         ).append(line)
 
     return sections
+
+
+def extract_full_name(
+    lines: list[str],
+) -> str | None:
+    for line in lines:
+        normalized_line = line.strip()
+        lowered_line = normalized_line.lower().rstrip(":")
+
+        if not normalized_line:
+            continue
+
+        if lowered_line in SECTION_HEADINGS:
+            continue
+
+        if normalize_section_heading(normalized_line) is not None:
+            continue
+
+        if EMAIL_PATTERN.search(normalized_line):
+            continue
+
+        if normalize_phone(normalized_line) is not None:
+            continue
+
+        if CURRENT_ROLE_PATTERN.match(normalized_line):
+            continue
+
+        if LOCATION_PATTERN.match(normalized_line):
+            continue
+
+        if EXPERIENCE_DATE_RANGE_PATTERN.match(normalized_line):
+            continue
+
+        if normalized_line.startswith(
+            EXPERIENCE_HIGHLIGHT_PREFIXES
+        ):
+            continue
+
+        if any(character.isdigit() for character in normalized_line):
+            continue
+
+        words = normalized_line.split()
+
+        if not 2 <= len(words) <= 5:
+            continue
+
+        if len(normalized_line) > 100:
+            continue
+
+        return normalized_line
+
+    return None
+
+
+def extract_skills(
+    text: str,
+) -> list[str]:
+    detected_skills: set[str] = set()
+
+    for canonical_name, aliases in SKILL_ALIASES.items():
+        for alias in aliases:
+            alias_pattern = re.compile(
+                (
+                    rf"(?<![\w.])"
+                    rf"{re.escape(alias)}"
+                    rf"(?![\w.])"
+                ),
+                flags=re.IGNORECASE,
+            )
+
+            if alias_pattern.search(text):
+                detected_skills.add(canonical_name)
+                break
+
+    return sorted(detected_skills)
 
 
 def extract_professional_summary(
@@ -240,6 +378,7 @@ def extract_professional_summary(
     summary = " ".join(summary_lines).strip()
 
     return summary or None
+
 
 def extract_labeled_value(
     lines: list[str],
@@ -277,6 +416,191 @@ def extract_location(
     )
 
 
+def is_current_end_date(
+    value: str,
+) -> bool:
+    return (
+        value.strip().lower()
+        in CURRENT_END_DATE_VALUES
+    )
+
+
+def parse_experience_date_range(
+    line: str,
+) -> tuple[str, str, bool] | None:
+    match = EXPERIENCE_DATE_RANGE_PATTERN.match(
+        line.strip()
+    )
+
+    if match is None:
+        return None
+
+    start_date = match.group("start").strip()
+    end_date = match.group("end").strip()
+
+    return (
+        start_date,
+        end_date,
+        is_current_end_date(end_date),
+    )
+
+
+def extract_experience_highlight(
+    line: str,
+) -> str | None:
+    normalized_line = line.strip()
+
+    for prefix in EXPERIENCE_HIGHLIGHT_PREFIXES:
+        if not normalized_line.startswith(prefix):
+            continue
+
+        highlight = normalized_line[
+            len(prefix):
+        ].strip()
+
+        return highlight or None
+
+    return None
+
+
+def extract_work_experience(
+    sections: dict[str, list[str]],
+) -> list[ResumeExperienceEntry]:
+    experience_lines = sections.get(
+        "experience",
+        [],
+    )
+
+    if not experience_lines:
+        return []
+
+    entries: list[ResumeExperienceEntry] = []
+
+    current_entry: dict[str, object] = {
+        "company": None,
+        "role": None,
+        "location": None,
+        "start_date": None,
+        "end_date": None,
+        "is_current": False,
+        "highlights": [],
+    }
+
+    def create_empty_entry() -> dict[str, object]:
+        return {
+            "company": None,
+            "role": None,
+            "location": None,
+            "start_date": None,
+            "end_date": None,
+            "is_current": False,
+            "highlights": [],
+        }
+
+    def flush_current_entry() -> None:
+        nonlocal current_entry
+
+        has_content = any(
+            [
+                current_entry["company"],
+                current_entry["role"],
+                current_entry["location"],
+                current_entry["start_date"],
+                current_entry["end_date"],
+                current_entry["highlights"],
+            ]
+        )
+
+        if has_content:
+            entries.append(
+                ResumeExperienceEntry(
+                    **current_entry,
+                )
+            )
+
+        current_entry = create_empty_entry()
+
+    for line in experience_lines:
+        company_match = (
+            EXPERIENCE_COMPANY_PATTERN.match(line)
+        )
+
+        if company_match is not None:
+            flush_current_entry()
+
+            current_entry["company"] = (
+                company_match.group("value").strip()
+            )
+            continue
+
+        role_match = EXPERIENCE_ROLE_PATTERN.match(line)
+
+        if role_match is not None:
+            current_entry["role"] = (
+                role_match.group("value").strip()
+            )
+            continue
+
+        location_match = LOCATION_PATTERN.match(line)
+
+        if location_match is not None:
+            current_entry["location"] = (
+                location_match.group("value").strip()
+            )
+            continue
+
+        date_range = parse_experience_date_range(line)
+
+        if date_range is not None:
+            (
+                start_date,
+                end_date,
+                is_current,
+            ) = date_range
+
+            current_entry["start_date"] = start_date
+            current_entry["end_date"] = end_date
+            current_entry["is_current"] = is_current
+            continue
+
+        start_date_match = (
+            EXPERIENCE_START_DATE_PATTERN.match(line)
+        )
+
+        if start_date_match is not None:
+            current_entry["start_date"] = (
+                start_date_match.group("value").strip()
+            )
+            continue
+
+        end_date_match = (
+            EXPERIENCE_END_DATE_PATTERN.match(line)
+        )
+
+        if end_date_match is not None:
+            end_date = (
+                end_date_match.group("value").strip()
+            )
+
+            current_entry["end_date"] = end_date
+            current_entry["is_current"] = (
+                is_current_end_date(end_date)
+            )
+            continue
+
+        highlight = extract_experience_highlight(line)
+
+        if highlight is not None:
+            highlights = current_entry["highlights"]
+
+            if isinstance(highlights, list):
+                highlights.append(highlight)
+
+    flush_current_entry()
+
+    return entries
+
+
 def parse_resume_text(
     text: str,
 ) -> ResumeProfileData:
@@ -291,19 +615,21 @@ def parse_resume_text(
     sections = split_resume_sections(lines)
 
     return ResumeProfileData(
-    full_name=extract_full_name(lines),
-    email=extract_email(normalized_text),
-    phone=extract_phone(normalized_text),
-    location=extract_location(lines),
-    current_role=extract_current_role(lines),
-    professional_summary=extract_professional_summary(
-        sections
-    ),
-    total_experience_months=None,
-    skills=extract_skills(normalized_text),
-    education=[],
-    work_experience=[],
-    projects=[],
-    certifications=[],
-    languages=[],
-)
+        full_name=extract_full_name(lines),
+        email=extract_email(normalized_text),
+        phone=extract_phone(normalized_text),
+        location=extract_location(lines),
+        current_role=extract_current_role(lines),
+        professional_summary=extract_professional_summary(
+            sections
+        ),
+        total_experience_months=None,
+        skills=extract_skills(normalized_text),
+        education=[],
+        work_experience=extract_work_experience(
+            sections
+        ),
+        projects=[],
+        certifications=[],
+        languages=[],
+    )

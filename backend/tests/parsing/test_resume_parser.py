@@ -7,14 +7,18 @@ from app.parsing.resume_parser import (
     ResumeParsingError,
     extract_current_role,
     extract_email,
+    extract_experience_highlight,
     extract_full_name,
     extract_labeled_value,
     extract_location,
     extract_phone,
     extract_professional_summary,
     extract_skills,
+    extract_work_experience,
+    is_current_end_date,
     normalize_lines,
     normalize_section_heading,
+    parse_experience_date_range,
     parse_resume_text,
     split_resume_sections,
 )
@@ -339,3 +343,171 @@ def test_parse_resume_text_extracts_role_and_location() -> None:
 
     assert profile.current_role == "Backend Developer"
     assert profile.location == "Hyderabad, Telangana"
+
+
+def test_parse_experience_date_range_extracts_past_dates(
+) -> None:
+    result = parse_experience_date_range(
+        "Dates: July 2022 - December 2023"
+    )
+
+    assert result == (
+        "July 2022",
+        "December 2023",
+        False,
+    )
+
+
+@pytest.mark.parametrize(
+    "end_date",
+    [
+        "Present",
+        "Current",
+        "Ongoing",
+        "Now",
+    ],
+)
+def test_parse_experience_date_range_marks_current_entries(
+    end_date: str,
+) -> None:
+    result = parse_experience_date_range(
+        f"January 2024 - {end_date}"
+    )
+
+    assert result == (
+        "January 2024",
+        end_date,
+        True,
+    )
+
+
+def test_parse_experience_date_range_returns_none_for_invalid_line(
+) -> None:
+    assert parse_experience_date_range(
+        "Worked for two years"
+    ) is None
+
+
+def test_is_current_end_date_is_case_insensitive() -> None:
+    assert is_current_end_date("PRESENT") is True
+    assert is_current_end_date("December 2025") is False
+
+
+def test_extract_experience_highlight_removes_bullet() -> None:
+    assert extract_experience_highlight(
+        "• Built REST APIs"
+    ) == "Built REST APIs"
+
+    assert extract_experience_highlight(
+        "Normal sentence"
+    ) is None
+
+
+def test_extract_work_experience_returns_structured_entry(
+) -> None:
+    sections = {
+        "experience": [
+            "Company: Acme Technologies",
+            "Role: Backend Developer",
+            "Location: Hyderabad",
+            "Dates: January 2024 - Present",
+            "- Built REST APIs",
+            "• Improved automated test coverage",
+        ],
+    }
+
+    result = extract_work_experience(sections)
+
+    assert len(result) == 1
+
+    entry = result[0]
+
+    assert entry.company == "Acme Technologies"
+    assert entry.role == "Backend Developer"
+    assert entry.location == "Hyderabad"
+    assert entry.start_date == "January 2024"
+    assert entry.end_date == "Present"
+    assert entry.is_current is True
+    assert entry.highlights == [
+        "Built REST APIs",
+        "Improved automated test coverage",
+    ]
+
+
+def test_extract_work_experience_supports_multiple_entries(
+) -> None:
+    sections = {
+        "experience": [
+            "Company: Acme Technologies",
+            "Role: Backend Developer",
+            "January 2024 - Present",
+            "- Built recruitment APIs",
+            "Company: Beta Systems",
+            "Designation: Frontend Developer",
+            "July 2022 - December 2023",
+            "* Developed React interfaces",
+        ],
+    }
+
+    result = extract_work_experience(sections)
+
+    assert len(result) == 2
+
+    assert result[0].company == "Acme Technologies"
+    assert result[0].role == "Backend Developer"
+    assert result[0].is_current is True
+    assert result[0].highlights == [
+        "Built recruitment APIs",
+    ]
+
+    assert result[1].company == "Beta Systems"
+    assert result[1].role == "Frontend Developer"
+    assert result[1].start_date == "July 2022"
+    assert result[1].end_date == "December 2023"
+    assert result[1].is_current is False
+    assert result[1].highlights == [
+        "Developed React interfaces",
+    ]
+
+
+def test_extract_work_experience_returns_empty_list_when_missing(
+) -> None:
+    assert extract_work_experience({}) == []
+
+
+def test_parse_resume_text_extracts_work_experience() -> None:
+    text = """
+    Harsha Vardhan
+    harsha@example.com
+
+    Professional Summary
+    Backend developer experienced in API development.
+
+    Work Experience
+    Company: Acme Technologies
+    Role: Backend Developer
+    Location: Hyderabad
+    Dates: January 2024 - Present
+    - Built REST APIs using FastAPI
+    - Worked with PostgreSQL
+
+    Skills
+    Python, FastAPI and PostgreSQL
+    """
+
+    profile = parse_resume_text(text)
+
+    assert len(profile.work_experience) == 1
+
+    experience = profile.work_experience[0]
+
+    assert experience.company == "Acme Technologies"
+    assert experience.role == "Backend Developer"
+    assert experience.location == "Hyderabad"
+    assert experience.start_date == "January 2024"
+    assert experience.end_date == "Present"
+    assert experience.is_current is True
+    assert experience.highlights == [
+        "Built REST APIs using FastAPI",
+        "Worked with PostgreSQL",
+    ]
