@@ -1,7 +1,14 @@
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import CheckConstraint, DateTime, Integer, String, func
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    Integer,
+    String,
+    Text,
+    func,
+)
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.dialects.postgresql import UUID as PostgreSQLUUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -43,11 +50,15 @@ class Job(Base):
         nullable=False,
     )
 
+    description: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
     department: Mapped[str] = mapped_column(
         String(100),
         nullable=False,
     )
-
     location: Mapped[str] = mapped_column(
         String(100),
         nullable=False,

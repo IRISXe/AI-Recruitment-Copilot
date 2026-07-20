@@ -21,6 +21,19 @@ class JobValidationRequest(BaseModel):
         max_length=100,
         examples=["Frontend Developer"],
     )
+
+
+    description: str | None = Field(
+        default=None,
+        min_length=20,
+        max_length=20000,
+        examples=[
+            (
+                "We are looking for a Backend Engineer with "
+                "experience in Python, FastAPI, and PostgreSQL."
+            )
+        ],
+    )
     department: str = Field(
         min_length=2,
         max_length=100,

@@ -11,6 +11,13 @@ from app.schemas.job import (
     JobValidationRequest,
     JobValidationResponse,
 )
+from app.schemas.job_requirement_profile import (
+    JobRequirementProfileResponse,
+)
+from app.services.job_requirement_profile_service import (
+    get_job_requirement_profile as get_job_requirement_profile_service,
+    parse_job_requirement_profile as parse_job_requirement_profile_service,
+)
 from app.services.job_service import (
     create_job as create_job_service,
     delete_job as delete_job_service,
@@ -53,6 +60,40 @@ async def validate_job(
     )
 
 
+@router.post(
+    "/{job_id}/parse",
+    response_model=JobRequirementProfileResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Parse structured job requirements",
+)
+def parse_job_requirement_profile(
+    job_id: UUID,
+    force: bool = Query(default=False),
+    session: Session = Depends(get_db),
+) -> JobRequirementProfileResponse:
+    return parse_job_requirement_profile_service(
+        session,
+        job_id=job_id,
+        force=force,
+    )
+
+
+@router.get(
+    "/{job_id}/profile",
+    response_model=JobRequirementProfileResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get structured job requirements",
+)
+def get_job_requirement_profile(
+    job_id: UUID,
+    session: Session = Depends(get_db),
+) -> JobRequirementProfileResponse:
+    return get_job_requirement_profile_service(
+        session,
+        job_id,
+    )
+
+
 @router.get(
     "",
     response_model=list[JobResponse],
@@ -86,7 +127,10 @@ def get_job_by_id(
     job_id: UUID,
     session: Session = Depends(get_db),
 ) -> JobResponse:
-    job = get_job_by_id_service(session, job_id)
+    job = get_job_by_id_service(
+        session,
+        job_id,
+    )
 
     return JobResponse.model_validate(job)
 
