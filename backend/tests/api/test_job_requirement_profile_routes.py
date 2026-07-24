@@ -1,248 +1,456 @@
+from datetime import UTC, datetime
+from unittest.mock import patch
 from uuid import UUID, uuid4
 
 import pytest
+from fastapi import status
 from fastapi.testclient import TestClient
-from sqlalchemy import select
-from sqlalchemy.orm import Session
 
-from app.models.job_requirement_profile import JobRequirementProfile
+from app.core.exceptions import AppException
+from app.models.job_requirement_profile import (
+    JobRequirementProfile,
+)
+from app.parsing.job_description_parser import (
+    PARSER_VERSION,
+)
+from app.schemas.job_requirement_profile import (
+    JobRequirementProfileData,
+)
 
 
 JOBS_URL = "/api/v1/jobs"
 
 
-FULL_JOB_DESCRIPTION = """
-Job Title: Senior Backend Engineer
-Department: Engineering
-Location: Hyderabad
-Work mode: Hybrid
-Employment type: Full-time
-
-About the Role
-We are looking for a Senior Backend Engineer to build scalable
-cloud applications.
-
-Responsibilities
-- Design and develop REST APIs using Python and FastAPI.
-- Maintain PostgreSQL databases.
-- Deploy applications using Docker and AWS.
-
-Required Skills
-- Python
-- FastAPI
-- PostgreSQL
-- Docker
-- Minimum 3 years of experience
-- Bachelor's degree in Computer Science
-
-Preferred Skills
-- Kubernetes
-- AWS Certified Developer certification preferred
-"""
-
-
-def valid_job_payload(
+def build_completed_job_requirement_profile(
     *,
-    title: str = "Senior Backend Engineer",
-    description: str | None = FULL_JOB_DESCRIPTION,
-) -> dict[str, object]:
-    return {
-        "title": title,
-        "description": description,
-        "department": "Engineering",
-        "location": "Hyderabad",
-        "employment_type": "full_time",
-        "minimum_experience": 3,
-        "required_skills": [
-            "Python",
-            "FastAPI",
-            "PostgreSQL",
-        ],
-        "preferred_skills": [
-            "Docker",
-            "Kubernetes",
-        ],
-    }
-
-
-def create_job(
-    client: TestClient,
-    *,
-    description: str | None = FULL_JOB_DESCRIPTION,
-) -> dict[str, object]:
-    response = client.post(
-        JOBS_URL,
-        json=valid_job_payload(
-            description=description,
-        ),
+    job_id: UUID,
+) -> JobRequirementProfile:
+    timestamp = datetime(
+        2026,
+        7,
+        24,
+        12,
+        0,
+        tzinfo=UTC,
     )
 
-    assert response.status_code == 201
+    profile_data = JobRequirementProfileData(
+        job_title="Frontend Engineer",
+        location="Hyderabad",
+        work_mode="hybrid",
+        required_skills=[
+            "React",
+            "TypeScript",
+            "REST APIs",
+        ],
+        preferred_skills=[
+            "AWS",
+            "Docker",
+        ],
+        minimum_experience_years=2,
+        confidence=0.90,
+    )
 
-    return response.json()
+    return JobRequirementProfile(
+        id=uuid4(),
+        job_id=job_id,
+        profile_data=profile_data.model_dump(
+            mode="json"
+        ),
+        parsing_status="completed",
+        parsing_error=None,
+        parser_version=PARSER_VERSION,
+        source_description_sha256="a" * 64,
+        parsed_at=timestamp,
+        created_at=timestamp,
+        updated_at=timestamp,
+    )
 
 
 def test_parse_job_requirement_profile_returns_completed_profile(
     client: TestClient,
-    db_session: Session,
 ) -> None:
-    created_job = create_job(client)
-    job_id = UUID(created_job["id"])
+    job_id = uuid4()
 
-    response = client.post(
-        f"{JOBS_URL}/{job_id}/parse"
+    profile = build_completed_job_requirement_profile(
+        job_id=job_id
     )
 
+    with patch(
+        "app.api.routes.job_requirement_profiles."
+        "parse_profile_service",
+        return_value=profile,
+    ) as parse_service:
+        response = client.post(
+            f"{JOBS_URL}/{job_id}/parse-requirements"
+        )
+
     assert response.status_code == 200
+
+    parse_service.assert_called_once()
+
+    assert parse_service.call_args.args[0] is not None
+
+    assert parse_service.call_args.kwargs == {
+        "job_id": job_id,
+        "force": False,
+    }
 
     body = response.json()
 
-    assert UUID(body["job_id"]) == job_id
+    assert body["id"] == str(profile.id)
+    assert body["job_id"] == str(job_id)
     assert body["parsing_status"] == "completed"
     assert body["parsing_error"] is None
-    assert body["parser_version"] == "job-rule-based-v1"
-    assert len(body["source_description_sha256"]) == 64
-    assert body["parsed_at"] is not None
+    assert body["parser_version"] == PARSER_VERSION
 
-    profile_data = body["profile_data"]
-
-    assert profile_data["job_title"] == "Senior Backend Engineer"
-    assert profile_data["department"] == "Engineering"
-    assert profile_data["location"] == "Hyderabad"
-    assert profile_data["employment_type"] == "full_time"
-    assert profile_data["work_mode"] == "hybrid"
-    assert profile_data["seniority_level"] == "senior"
-    assert profile_data["minimum_experience_years"] == 3
-
-    assert "Python" in profile_data["required_skills"]
-    assert "FastAPI" in profile_data["required_skills"]
-    assert "PostgreSQL" in profile_data["required_skills"]
-    assert "Kubernetes" in profile_data["preferred_skills"]
-
-    db_session.expire_all()
-
-    statement = select(JobRequirementProfile).where(
-        JobRequirementProfile.job_id == job_id
-    )
-
-    persisted_profile = db_session.scalar(statement)
-
-    assert persisted_profile is not None
-    assert persisted_profile.parsing_status == "completed"
-    assert persisted_profile.parser_version == "job-rule-based-v1"
-    assert persisted_profile.profile_data is not None
     assert (
-        persisted_profile.profile_data["job_title"]
-        == "Senior Backend Engineer"
+        body["source_description_sha256"]
+        == "a" * 64
     )
 
+    assert body["profile_data"]["job_title"] == (
+        "Frontend Engineer"
+    )
+    assert body["profile_data"]["location"] == (
+        "Hyderabad"
+    )
+    assert body["profile_data"]["work_mode"] == (
+        "hybrid"
+    )
 
-def test_get_job_requirement_profile_returns_existing_profile(
+    assert body["profile_data"]["required_skills"] == [
+        "React",
+        "TypeScript",
+        "REST APIs",
+    ]
+
+    assert body["profile_data"]["preferred_skills"] == [
+        "AWS",
+        "Docker",
+    ]
+
+    assert (
+        body["profile_data"]["minimum_experience_years"]
+        == 2
+    )
+    assert body["profile_data"]["confidence"] == 0.9
+
+    assert body["parsed_at"] is not None
+    assert body["created_at"] is not None
+    assert body["updated_at"] is not None
+
+
+def test_parse_job_requirement_profile_accepts_force_true(
     client: TestClient,
 ) -> None:
-    created_job = create_job(client)
-    job_id = created_job["id"]
+    job_id = uuid4()
 
-    parsed_response = client.post(
-        f"{JOBS_URL}/{job_id}/parse"
+    profile = build_completed_job_requirement_profile(
+        job_id=job_id
     )
 
-    assert parsed_response.status_code == 200
-
-    response = client.get(
-        f"{JOBS_URL}/{job_id}/profile"
-    )
+    with patch(
+        "app.api.routes.job_requirement_profiles."
+        "parse_profile_service",
+        return_value=profile,
+    ) as parse_service:
+        response = client.post(
+            f"{JOBS_URL}/{job_id}/parse-requirements",
+            params={
+                "force": "true",
+            },
+        )
 
     assert response.status_code == 200
-    assert response.json()["id"] == parsed_response.json()["id"]
-    assert response.json()["job_id"] == job_id
-    assert response.json()["parsing_status"] == "completed"
+
+    parse_service.assert_called_once()
+
+    assert parse_service.call_args.kwargs == {
+        "job_id": job_id,
+        "force": True,
+    }
 
 
-def test_get_job_requirement_profile_returns_404_before_parsing(
+def test_get_job_requirement_profile_returns_profile(
     client: TestClient,
 ) -> None:
-    created_job = create_job(client)
+    job_id = uuid4()
 
-    response = client.get(
-        f"{JOBS_URL}/{created_job['id']}/profile"
+    profile = build_completed_job_requirement_profile(
+        job_id=job_id
     )
 
-    assert response.status_code == 404
-    assert (
-        response.json()["error"]["code"]
-        == "job_requirement_profile_not_found"
-    )
+    with patch(
+        "app.api.routes.job_requirement_profiles."
+        "get_profile_service",
+        return_value=profile,
+    ) as get_service:
+        response = client.get(
+            f"{JOBS_URL}/{job_id}/requirement-profile"
+        )
 
+    assert response.status_code == 200
 
-def test_parse_job_requirement_profile_rejects_empty_description(
-    client: TestClient,
-) -> None:
-    created_job = create_job(
-        client,
-        description=None,
-    )
+    get_service.assert_called_once()
 
-    response = client.post(
-        f"{JOBS_URL}/{created_job['id']}/parse"
-    )
+    assert get_service.call_args.args[0] is not None
+    assert get_service.call_args.args[1] == job_id
 
-    assert response.status_code == 422
-    assert (
-        response.json()["error"]["code"]
-        == "job_description_empty"
+    body = response.json()
+
+    assert body["id"] == str(profile.id)
+    assert body["job_id"] == str(job_id)
+    assert body["parsing_status"] == "completed"
+    assert body["profile_data"]["job_title"] == (
+        "Frontend Engineer"
     )
 
 
 @pytest.mark.parametrize(
-    "endpoint_suffix",
+    (
+        "method",
+        "url",
+        "expected_location",
+    ),
     [
-        "parse",
-        "profile",
+        (
+            "post",
+            (
+                f"{JOBS_URL}/not-a-valid-uuid/"
+                "parse-requirements"
+            ),
+            [
+                "path",
+                "job_id",
+            ],
+        ),
+        (
+            "get",
+            (
+                f"{JOBS_URL}/not-a-valid-uuid/"
+                "requirement-profile"
+            ),
+            [
+                "path",
+                "job_id",
+            ],
+        ),
     ],
 )
-def test_job_requirement_profile_routes_return_404_for_unknown_job(
+def test_job_requirement_profile_routes_reject_malformed_uuid(
     client: TestClient,
-    endpoint_suffix: str,
+    method: str,
+    url: str,
+    expected_location: list[str],
+) -> None:
+    with (
+        patch(
+            "app.api.routes.job_requirement_profiles."
+            "parse_profile_service",
+        ) as parse_service,
+        patch(
+            "app.api.routes.job_requirement_profiles."
+            "get_profile_service",
+        ) as get_service,
+    ):
+        request_method = getattr(
+            client,
+            method,
+        )
+
+        response = request_method(url)
+
+    assert response.status_code == 422
+
+    assert (
+        response.json()["error"]["code"]
+        == "validation_error"
+    )
+
+    details = response.json()["error"]["details"]
+
+    assert any(
+        detail["loc"] == expected_location
+        for detail in details
+    )
+
+    parse_service.assert_not_called()
+    get_service.assert_not_called()
+
+
+def test_parse_job_requirement_profile_rejects_invalid_force(
+    client: TestClient,
 ) -> None:
     job_id = uuid4()
 
-    if endpoint_suffix == "parse":
+    with patch(
+        "app.api.routes.job_requirement_profiles."
+        "parse_profile_service",
+    ) as parse_service:
         response = client.post(
-            f"{JOBS_URL}/{job_id}/parse"
+            f"{JOBS_URL}/{job_id}/parse-requirements",
+            params={
+                "force": "not-a-boolean",
+            },
         )
-    else:
-        response = client.get(
-            f"{JOBS_URL}/{job_id}/profile"
-        )
 
-    assert response.status_code == 404
-    assert response.json()["error"]["code"] == "job_not_found"
+    assert response.status_code == 422
 
-
-def test_force_true_reprocesses_existing_profile(
-    client: TestClient,
-) -> None:
-    created_job = create_job(client)
-    job_id = created_job["id"]
-
-    first_response = client.post(
-        f"{JOBS_URL}/{job_id}/parse"
-    )
-
-    second_response = client.post(
-        f"{JOBS_URL}/{job_id}/parse",
-        params={
-            "force": True,
-        },
-    )
-
-    assert first_response.status_code == 200
-    assert second_response.status_code == 200
-
-    assert second_response.json()["id"] == first_response.json()["id"]
-    assert second_response.json()["parsing_status"] == "completed"
     assert (
-        second_response.json()["source_description_sha256"]
-        == first_response.json()["source_description_sha256"]
+        response.json()["error"]["code"]
+        == "validation_error"
     )
+
+    assert any(
+        detail["loc"] == [
+            "query",
+            "force",
+        ]
+        for detail in response.json()["error"]["details"]
+    )
+
+    parse_service.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    (
+        "expected_status",
+        "expected_code",
+        "expected_message",
+    ),
+    [
+        (
+            status.HTTP_404_NOT_FOUND,
+            "job_not_found",
+            "The requested job does not exist.",
+        ),
+        (
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "job_description_empty",
+            (
+                "The job description is empty and "
+                "cannot be processed."
+            ),
+        ),
+        (
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "job_description_parsing_failed",
+            (
+                "The job description could not be parsed "
+                "into structured requirements."
+            ),
+        ),
+        (
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "job_requirement_profile_persistence_failed",
+            (
+                "The structured job requirement profile "
+                "could not be saved."
+            ),
+        ),
+    ],
+)
+def test_parse_job_requirement_profile_returns_service_error(
+    client: TestClient,
+    expected_status: int,
+    expected_code: str,
+    expected_message: str,
+) -> None:
+    job_id = uuid4()
+
+    with patch(
+        "app.api.routes.job_requirement_profiles."
+        "parse_profile_service",
+        side_effect=AppException(
+            status_code=expected_status,
+            code=expected_code,
+            message=expected_message,
+        ),
+    ) as parse_service:
+        response = client.post(
+            f"{JOBS_URL}/{job_id}/parse-requirements"
+        )
+
+    assert response.status_code == expected_status
+
+    assert response.json() == {
+        "error": {
+            "code": expected_code,
+            "message": expected_message,
+            "details": None,
+        }
+    }
+
+    parse_service.assert_called_once()
+
+    assert parse_service.call_args.kwargs == {
+        "job_id": job_id,
+        "force": False,
+    }
+
+
+@pytest.mark.parametrize(
+    (
+        "expected_status",
+        "expected_code",
+        "expected_message",
+    ),
+    [
+        (
+            status.HTTP_404_NOT_FOUND,
+            "job_not_found",
+            "The requested job does not exist.",
+        ),
+        (
+            status.HTTP_404_NOT_FOUND,
+            "job_requirement_profile_not_found",
+            (
+                "A structured requirement profile is not "
+                "available for this job."
+            ),
+        ),
+        (
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "job_requirement_profile_retrieval_failed",
+            (
+                "The structured job requirement profile "
+                "could not be retrieved."
+            ),
+        ),
+    ],
+)
+def test_get_job_requirement_profile_returns_service_error(
+    client: TestClient,
+    expected_status: int,
+    expected_code: str,
+    expected_message: str,
+) -> None:
+    job_id = uuid4()
+
+    with patch(
+        "app.api.routes.job_requirement_profiles."
+        "get_profile_service",
+        side_effect=AppException(
+            status_code=expected_status,
+            code=expected_code,
+            message=expected_message,
+        ),
+    ) as get_service:
+        response = client.get(
+            f"{JOBS_URL}/{job_id}/requirement-profile"
+        )
+
+    assert response.status_code == expected_status
+
+    assert response.json() == {
+        "error": {
+            "code": expected_code,
+            "message": expected_message,
+            "details": None,
+        }
+    }
+
+    get_service.assert_called_once()
+
+    assert get_service.call_args.args[1] == job_id
