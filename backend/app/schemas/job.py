@@ -1,8 +1,14 @@
 from datetime import datetime
-from typing import Literal, Self
+from typing import Annotated, Literal, Self
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    model_validator,
+)
 
 
 EmploymentType = Literal[
@@ -12,52 +18,82 @@ EmploymentType = Literal[
     "internship",
 ]
 
+Skill = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=1,
+        max_length=100,
+    ),
+]
+
 
 class JobValidationRequest(BaseModel):
-    model_config = ConfigDict(str_strip_whitespace=True)
+    model_config = ConfigDict(
+        str_strip_whitespace=True,
+    )
 
     title: str = Field(
         min_length=2,
         max_length=100,
-        examples=["Frontend Developer"],
+        examples=["Frontend Engineer"],
     )
-
 
     description: str | None = Field(
         default=None,
-        min_length=20,
-        max_length=20000,
+        min_length=1,
+        max_length=20_000,
         examples=[
             (
-                "We are looking for a Backend Engineer with "
-                "experience in Python, FastAPI, and PostgreSQL."
+                "We are hiring a Frontend Engineer with "
+                "React and TypeScript experience."
             )
         ],
     )
+
     department: str = Field(
         min_length=2,
         max_length=100,
         examples=["Engineering"],
     )
+
     location: str = Field(
         min_length=2,
         max_length=100,
         examples=["Hyderabad"],
     )
-    employment_type: EmploymentType
+
+    employment_type: EmploymentType = Field(
+        examples=["full_time"],
+    )
+
     minimum_experience: int = Field(
         ge=0,
         le=50,
         examples=[2],
     )
-    required_skills: list[str] = Field(
+
+    required_skills: list[Skill] = Field(
         min_length=1,
         max_length=20,
-        examples=[["React", "TypeScript", "REST APIs"]],
+        examples=[
+            [
+                "React",
+                "TypeScript",
+                "REST APIs",
+            ]
+        ],
     )
-    preferred_skills: list[str] = Field(
+
+    preferred_skills: list[Skill] = Field(
         default_factory=list,
         max_length=20,
+        examples=[
+            [
+                "AWS",
+                "Docker",
+            ]
+        ],
     )
 
 
@@ -66,40 +102,49 @@ class JobCreate(JobValidationRequest):
 
 
 class JobUpdate(BaseModel):
-    model_config = ConfigDict(str_strip_whitespace=True)
+    model_config = ConfigDict(
+        str_strip_whitespace=True,
+    )
 
     title: str | None = Field(
         default=None,
         min_length=2,
         max_length=100,
-        examples=["Senior Frontend Developer"],
     )
+
+    description: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=20_000,
+    )
+
     department: str | None = Field(
         default=None,
         min_length=2,
         max_length=100,
-        examples=["Engineering"],
     )
+
     location: str | None = Field(
         default=None,
         min_length=2,
         max_length=100,
-        examples=["Bengaluru"],
     )
+
     employment_type: EmploymentType | None = None
+
     minimum_experience: int | None = Field(
         default=None,
         ge=0,
         le=50,
-        examples=[3],
     )
-    required_skills: list[str] | None = Field(
+
+    required_skills: list[Skill] | None = Field(
         default=None,
         min_length=1,
         max_length=20,
-        examples=[["React", "TypeScript"]],
     )
-    preferred_skills: list[str] | None = Field(
+
+    preferred_skills: list[Skill] | None = Field(
         default=None,
         max_length=20,
     )
@@ -107,16 +152,19 @@ class JobUpdate(BaseModel):
     @model_validator(mode="after")
     def validate_update_fields(self) -> Self:
         if not self.model_fields_set:
-            raise ValueError("At least one field must be provided for update.")
+            raise ValueError(
+                "At least one field must be provided for update."
+            )
 
-        null_fields = [
+        null_fields = sorted(
             field_name
             for field_name in self.model_fields_set
             if getattr(self, field_name) is None
-        ]
+        )
 
         if null_fields:
-            fields = ", ".join(sorted(null_fields))
+            fields = ", ".join(null_fields)
+
             raise ValueError(
                 f"Updated fields cannot be null: {fields}."
             )
@@ -136,5 +184,9 @@ class JobResponse(JobValidationRequest):
 
 
 class JobValidationResponse(BaseModel):
+    model_config = ConfigDict(
+        str_strip_whitespace=True,
+    )
+
     message: str
     job: JobValidationRequest
