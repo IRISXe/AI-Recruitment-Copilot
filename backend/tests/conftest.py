@@ -10,6 +10,7 @@ from app.db.session import engine, get_db
 from app.main import app
 from app.models.application import Application
 from app.models.candidate import Candidate
+from app.models.candidate_job_match import CandidateJobMatch
 from app.models.job import Job
 from app.models.resume import Resume
 from app.models.resume_content import ResumeContent
@@ -20,9 +21,10 @@ def db_connection() -> Generator[Connection, None, None]:
     connection = engine.connect()
     transaction = connection.begin()
 
-    # Tests begin with empty Resume content, resumes, applications,
-    # candidates, and jobs tables. Existing development rows are
-    # restored when the outer transaction is rolled back.
+    # Tests begin with empty Candidate match, Resume content, resumes,
+    # applications, candidates, and jobs tables. Existing development
+    # rows are restored when the outer transaction is rolled back.
+    connection.execute(delete(CandidateJobMatch))
     connection.execute(delete(ResumeContent))
     connection.execute(delete(Resume))
     connection.execute(delete(Application))
