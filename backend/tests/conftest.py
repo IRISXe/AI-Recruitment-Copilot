@@ -10,6 +10,9 @@ from app.db.session import engine, get_db
 from app.main import app
 from app.models.application import Application
 from app.models.candidate import Candidate
+from app.models.candidate_ai_analysis import (
+    CandidateAIAnalysis,
+)
 from app.models.candidate_job_match import CandidateJobMatch
 from app.models.job import Job
 from app.models.resume import Resume
