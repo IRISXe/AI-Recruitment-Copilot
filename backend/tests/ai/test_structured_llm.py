@@ -24,6 +24,9 @@ class ExampleStructuredOutput(BaseModel):
 
 
 class ExampleStructuredLLMClient:
+    provider = "fake"
+    model_name = "fake-model-v1"
+
     def generate_structured_output(
         self,
         *,
@@ -42,8 +45,8 @@ class ExampleStructuredLLMClient:
 
         return StructuredLLMResult(
             output=output,
-            provider="fake",
-            model_name="fake-model-v1",
+            provider=self.provider,
+            model_name=self.model_name,
             input_tokens=0,
             output_tokens=0,
             total_tokens=0,
@@ -52,10 +55,39 @@ class ExampleStructuredLLMClient:
         )
 
 
+class MissingIdentityStructuredLLMClient:
+    def generate_structured_output(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        response_model: type[ExampleStructuredOutput],
+    ) -> StructuredLLMResult[
+        ExampleStructuredOutput
+    ]:
+        raise NotImplementedError
+
+
 def test_structured_llm_client_matches_protocol() -> None:
     client = ExampleStructuredLLMClient()
 
     assert isinstance(
+        client,
+        StructuredLLMClient,
+    )
+
+
+def test_structured_llm_client_exposes_identity() -> None:
+    client = ExampleStructuredLLMClient()
+
+    assert client.provider == "fake"
+    assert client.model_name == "fake-model-v1"
+
+
+def test_structured_llm_protocol_requires_identity() -> None:
+    client = MissingIdentityStructuredLLMClient()
+
+    assert not isinstance(
         client,
         StructuredLLMClient,
     )

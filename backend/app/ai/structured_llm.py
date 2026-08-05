@@ -94,6 +94,14 @@ class StructuredLLMResult(Generic[ResponseModelT]):
 
 @runtime_checkable
 class StructuredLLMClient(Protocol):
+    @property
+    def provider(self) -> str:
+        ...
+
+    @property
+    def model_name(self) -> str:
+        ...
+
     def generate_structured_output(
         self,
         *,
@@ -102,7 +110,6 @@ class StructuredLLMClient(Protocol):
         response_model: type[ResponseModelT],
     ) -> StructuredLLMResult[ResponseModelT]:
         ...
-
 
 class StructuredLLMError(Exception):
     code = "structured_llm_error"
